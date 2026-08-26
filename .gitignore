@@ -1,4 +1,5 @@
 node_modules/
 .next/
 out/
-graphify-out.playwright-mcp/
+graphify-out
+.playwright-mcp/
