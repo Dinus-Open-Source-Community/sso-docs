@@ -1,0 +1,271 @@
+---
+title: Endpoint Referensi
+---
+
+import { Callout } from 'nextra/components'
+
+# Endpoint Referensi
+
+Base URL SSO: `https://sso.doscom.org` (development: `http://localhost:8080`)
+
+Dokumentasi ini membagi endpoint menjadi tiga kelompok:
+
+| Kelompok | Path | Kegunaan |
+|----------|------|----------|
+| **OAuth / OIDC** | `/authorize`, `/token`, `/userinfo`, ... | Alur "Login With Namamu" antar aplikasi |
+| **Auth API** | `/api/auth/*` | Registrasi, login, profil — API JSON langsung (lihat [Auth API](/auth-api)) |
+| **Avatar** | `/api/avatar` | Upload foto profil user (lihat [Avatar](/avatar)) |
+
+Discovery document lengkap tersedia di:
+
+```
+GET /.well-known/openid-configuration
+```
+
+---
+
+# OAuth / OIDC
+
+## GET /authorize
+
+Endpoint awal alur OAuth. Redirect browser user ke sini.
+
+**Query Parameters**
+
+| Parameter | Wajib | Keterangan |
+|-----------|-------|-----------|
+| `client_id` | Ya | Client ID dari Developer Console |
+| `redirect_uri` | Ya | Harus terdaftar di whitelist |
+| `response_type` | Ya | Selalu `code` |
+| `scope` | Ya | Minimal `openid`; bisa tambah `profile email` |
+| `state` | Ya | String acak untuk CSRF protection |
+| `code_challenge` | Kondisional | Wajib untuk public client (PKCE) |
+| `code_challenge_method` | Kondisional | `S256` (direkomendasikan) atau `plain` |
+
+**Response**: Redirect ke halaman login SSO, atau langsung ke `redirect_uri` kalau session aktif.
+
+**Setelah login sukses**, SSO redirect ke:
+
+```
+{redirect_uri}?code=AUTH_CODE&state=STATE
+```
+
+### Halaman login SSO (browser flows)
+
+Halaman `/authorize` juga menerima submit form langsung (bukan API — untuk browser):
+
+| Endpoint | Method | Form fields | Keterangan |
+|----------|--------|-------------|------------|
+| `/authorize` | POST | `email`, `password` — atau `user_id` untuk "Pilih akun" | Login manual / pilih akun tersimpan |
+| `/authorize/verify` | POST | `email`, `purpose`, `code`, `resend` (opsional) | Verifikasi OTP 6 digit (login/daftar/pilih akun) |
+| `/register` | POST | `name`, `email`, `password` | Daftar akun baru, lanjut verifikasi OTP |
+| `/forgot-password` | GET/POST | `email` | Minta kode reset password |
+| `/reset-password` | POST | `email`, `password`, `code` | Set password baru |
+
+Semua form di atas membawa parameter OAuth (`client_id`, `redirect_uri`, `state`, ...) yang diteruskan kembali ke `redirect_uri` setelah berhasil. Aplikasimu **tidak perlu** mengimplementasikannya — cukup redirect ke `/authorize`.
+
+---
+
+## POST /token
+
+Tukar authorization code dengan access token. **Harus dipanggil dari server-side.**
+
+**Request** (`application/x-www-form-urlencoded`)
+
+| Field | Wajib | Keterangan |
+|-------|-------|-----------|
+| `grant_type` | Ya | `authorization_code` |
+| `code` | Ya | Code dari callback |
+| `redirect_uri` | Ya | Harus sama persis dengan yang di `/authorize` |
+| `client_id` | Ya | Via form atau HTTP Basic Auth |
+| `client_secret` | Kondisional | Untuk confidential client |
+| `code_verifier` | Kondisional | Untuk public client (PKCE) |
+
+**Response** `200 OK`
+
+```json
+{
+  "access_token": "eyJhbGciOiJSUzI1NiIs...",
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "refresh_token": "a1b2c3d4...",
+  "id_token": "eyJhbGciOiJSUzI1NiIs...",
+  "scope": "openid profile email"
+}
+```
+
+**Error responses**
+
+| Code | Error | Penyebab |
+|------|-------|---------|
+| 400 | `invalid_grant` | Code sudah dipakai / expired |
+| 401 | `invalid_client` | client_id / secret salah |
+| 400 | `invalid_request` | Parameter kurang / verifier salah |
+
+Format error: `{"error": "invalid_grant"}`
+
+---
+
+## POST /token/refresh
+
+Perbarui access token dengan refresh token.
+
+**Request** (`application/x-www-form-urlencoded`)
+
+| Field | Wajib | Keterangan |
+|-------|-------|-----------|
+| `grant_type` | Ya | `refresh_token` |
+| `refresh_token` | Ya | Refresh token yang disimpan |
+| `client_id` | Ya | Via form atau HTTP Basic Auth |
+| `client_secret` | Kondisional | Untuk confidential client |
+
+**Response**: sama dengan `/token` — berisi access token + refresh token **baru**.
+
+<Callout type="warning">
+  Refresh token lama langsung tidak berlaku setelah dipakai. Simpan refresh token
+  **baru** dari response, bukan yang lama.
+</Callout>
+
+> `grant_type=refresh_token` juga diterima di `/token` — `/token/refresh` adalah
+> alias khusus refresh yang lebih simpel.
+
+---
+
+## GET /userinfo
+
+Ambil informasi user dari access token.
+
+**Request**
+
+```http
+GET /userinfo
+Authorization: Bearer ACCESS_TOKEN
+```
+
+**Response** `200 OK`
+
+```json
+{
+  "id": 4,
+  "name": "Budi Santoso",
+  "email": "budi@doscom.org",
+  "avatar_url": "https://cdn.doscom.org/avatars/4.png",
+  "created_at": "2025-01-01T00:00:00Z"
+}
+```
+
+<Callout type="info">
+  Field mengikuti scope yang diminta:
+  - `name` dan `avatar_url` hanya ada kalau scope `profile` diminta
+  - `email` hanya ada kalau scope `email` diminta
+</Callout>
+
+---
+
+## POST /revoke
+
+Cabut token (RFC 7009). Bisa untuk access token maupun refresh token.
+
+**Request** (`application/x-www-form-urlencoded`)
+
+| Field | Wajib | Keterangan |
+|-------|-------|-----------|
+| `token` | Ya | Token yang ingin dicabut |
+| `client_id` | Ya | Via form atau HTTP Basic Auth |
+| `client_secret` | Kondisional | Untuk confidential client |
+
+**Response**: `200 OK` body kosong (selalu — sesuai RFC 7009, error tidak diekspos).
+
+---
+
+## POST /logout
+
+Logout user dari SSO session. Dua mode:
+
+**Request** (`application/x-www-form-urlencoded`)
+
+| Field | Keterangan |
+|-------|-----------|
+| `user_id` | (opsional) ID user yang di-logout. Jika diisi → logout akun tersebut saja dari session; jika kosong → logout **seluruh** session (semua akun). |
+
+Jika session setelah logout menjadi kosong (tidak ada akun lagi), cookie session otomatis dihapus.
+
+**Response**: `200 OK`
+
+```json
+{ "status": "ok" }
+```
+
+---
+
+## GET /check-session
+
+Silent auth check via iframe — cek status login tanpa full redirect.
+
+**Response** `200 OK`
+
+```json
+{ "logged_in": true, "user_id": 4 }
+```
+
+atau
+
+```json
+{ "logged_in": false }
+```
+
+---
+
+## GET /.well-known/jwks.json
+
+Public key untuk verifikasi JWT RS256 secara lokal (tanpa koneksi ke SSO).
+
+**Response**
+
+```json
+{
+  "keys": [
+    {
+      "kty": "RSA",
+      "use": "sig",
+      "alg": "RS256",
+      "kid": "...",
+      "n": "...",
+      "e": "AQAB"
+    }
+  ]
+}
+```
+
+Library JWT di semua bahasa mendukung JWKS — cukup arahkan ke URL ini.
+
+---
+
+## GET /.well-known/openid-configuration
+
+Metadata OIDC lengkap: semua URL endpoint, scope, algoritma, dll.
+
+---
+
+# Auth API & Avatar
+
+API JSON untuk mengelola akun **tanpa** alur redirect OAuth:
+
+- **Auth API** (`/api/auth/*`): registrasi, login, verifikasi email, lupa/reset password, profil — lihat **[Auth API](/auth-api)**
+- **Avatar** (`POST /api/avatar`): upload foto profil — lihat **[Avatar](/avatar)**
+
+---
+
+## Rate Limiting
+
+| Endpoint | Limit |
+|----------|-------|
+| `POST /authorize` (login) | 5 percobaan / 15 menit per email |
+| `POST /authorize/verify` (OTP) | 30 percobaan / menit per email+purpose |
+| `POST /register` (form OAuth) | 5 percobaan / 15 menit per email |
+| `POST /forgot-password` (form OAuth) | 5 percobaan / 15 menit per email |
+| `POST /reset-password` | 10 percobaan / 15 menit per email |
+| `POST /token` | 20 request / menit per IP |
+| `POST /api/auth/register` | 5 percobaan / 15 menit per IP |
+| `POST /api/auth/forgot-password` | 5 percobaan / 15 menit per IP |
+| `POST /api/auth/reset-password` | 10 percobaan / menit per IP |

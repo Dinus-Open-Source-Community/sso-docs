@@ -1,0 +1,10 @@
+{
+  "go": "Go (ssoauth)",
+  "nodejs": "Node.js",
+  "php": "PHP",
+  "python": "Python",
+  "java": "Java",
+  "ruby": "Ruby",
+  "rust": "Rust",
+  "csharp": "C# (.NET)"
+}

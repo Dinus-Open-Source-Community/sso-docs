@@ -1,0 +1,13 @@
+{
+  "*": {
+    "title": "DOSCOM SSO Docs"
+  },
+  "index": "Beranda",
+  "how-it-works": "Cara Kerja",
+  "endpoints": "Endpoint Referensi",
+  "auth-api": "Auth API",
+  "avatar": "Avatar",
+  "integration": "Panduan Integrasi",
+  "developer-console": "Developer Console",
+  "admin": "Admin — Kelola User"
+}

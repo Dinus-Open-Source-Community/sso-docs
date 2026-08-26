@@ -1,0 +1,202 @@
+---
+title: Integrasi Node.js
+---
+
+import { Callout, Tabs, Tab } from 'nextra/components'
+
+# Integrasi Node.js
+
+Gunakan library `openid-client` — implementasi OAuth2/OIDC terlengkap untuk Node.js.
+Contoh berikut pakai Express, tapi pola yang sama berlaku untuk framework apapun.
+
+## Instalasi
+
+```bash
+npm install openid-client express-session
+```
+
+## Setup
+
+```js
+// sso.js
+const { Issuer } = require('openid-client')
+
+let ssoClient
+
+async function getSSOClient() {
+  if (ssoClient) return ssoClient
+
+  // Auto-discovery dari OIDC metadata endpoint
+  const issuer = await Issuer.discover('https://sso.doscom.org')
+
+  ssoClient = new issuer.Client({
+    client_id: process.env.SSO_CLIENT_ID,
+    client_secret: process.env.SSO_CLIENT_SECRET, // kosong untuk public client
+    redirect_uris: ['https://appkamu.com/callback'],
+    response_types: ['code'],
+  })
+
+  return ssoClient
+}
+
+module.exports = { getSSOClient }
+```
+
+## Handler Login (Express)
+
+```js
+const { generators } = require('openid-client')
+
+app.get('/login', async (req, res) => {
+  const client = await getSSOClient()
+
+  // PKCE (wajib untuk public client, direkomendasikan untuk semua)
+  const codeVerifier = generators.codeVerifier()
+  const codeChallenge = generators.codeChallenge(codeVerifier)
+  const state = generators.state()
+
+  // Simpan di session
+  req.session.codeVerifier = codeVerifier
+  req.session.state = state
+
+  const authUrl = client.authorizationUrl({
+    scope: 'openid profile email',
+    state,
+    code_challenge: codeChallenge,
+    code_challenge_method: 'S256',
+  })
+
+  res.redirect(authUrl)
+})
+```
+
+## Handler Callback (Express)
+
+```js
+app.get('/callback', async (req, res) => {
+  const client = await getSSOClient()
+
+  const params = client.callbackParams(req)
+
+  // Verifikasi state + tukar code → token (termasuk verifikasi id_token otomatis)
+  const tokenSet = await client.callback(
+    'https://appkamu.com/callback',
+    params,
+    {
+      state: req.session.state,
+      code_verifier: req.session.codeVerifier,
+    }
+  )
+
+  // Klaim id_token (sudah diverifikasi: signature, iss, aud, exp)
+  const claims = tokenSet.claims() // sub, name, email, picture
+
+  // Ambil profil dari /userinfo (id, name, email, avatar_url — sesuai scope)
+  const userinfo = await client.userinfo(tokenSet.access_token)
+
+  // Simpan ke session
+  req.session.user = { id: userinfo.id, email: userinfo.email, name: userinfo.name }
+  req.session.avatarUrl = userinfo.avatar_url
+  req.session.accessToken = tokenSet.access_token
+  req.session.refreshToken = tokenSet.refresh_token
+
+  res.redirect('/dashboard')
+})
+```
+
+<Callout type="info">
+  Klaim `tokenSet.claims()` berasal dari **id_token** (`sub`, `picture`, ...).
+  `client.userinfo()` memanggil endpoint `/userinfo` yang formatnya berbeda:
+  `{ id, name, email, avatar_url, created_at }` — dan `name`/`avatar_url`/`email`
+  hanya muncul sesuai scope yang diminta.
+</Callout>
+
+## Refresh Token
+
+```js
+app.use(async (req, res, next) => {
+  const client = await getSSOClient()
+
+  if (req.session.accessToken && isExpired(req.session.accessToken)) {
+    // SSO me-rotate refresh token — simpan token baru!
+    const tokenSet = await client.refresh(req.session.refreshToken)
+    req.session.accessToken  = tokenSet.access_token
+    req.session.refreshToken = tokenSet.refresh_token
+  }
+
+  next()
+})
+```
+
+## Logout & Revoke
+
+```js
+app.post('/logout', async (req, res) => {
+  const client = await getSSOClient()
+
+  // Cabut refresh token di SSO (best-effort, RFC 7009)
+  await client.revoke(req.session.refreshToken).catch(() => {})
+
+  req.session.destroy(() => res.redirect('/'))
+})
+```
+
+## Auth API & Avatar
+
+Untuk registrasi/login langsung dan upload avatar (tanpa alur redirect OAuth),
+lihat **[Auth API](/auth-api)** dan **[Avatar](/avatar)**:
+
+<Tabs items={['Login', 'Me', 'Avatar']}>
+
+<Tab>
+
+```js
+// Login → JWT untuk /api/*
+const res = await fetch('https://sso.doscom.org/api/auth/login', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ email: 'budi@doscom.org', password: 'rahasia123' }),
+})
+const { data } = await res.json() // data.token
+```
+
+</Tab>
+
+<Tab>
+
+```js
+// Profil user dari token JWT
+const res = await fetch('https://sso.doscom.org/api/auth/me', {
+  headers: { Authorization: `Bearer ${token}` },
+})
+const { data: user } = await res.json()
+```
+
+</Tab>
+
+<Tab>
+
+```js
+// Upload avatar (Node 18+: FormData + Blob)
+const form = new FormData()
+form.append('avatar', new Blob([await fs.readFile('foto.png')]), 'foto.png')
+
+const res = await fetch('https://sso.doscom.org/api/avatar', {
+  method: 'POST',
+  headers: { Authorization: `Bearer ${token}` },
+  body: form,
+})
+const { data } = await res.json() // data.avatar_url
+```
+
+</Tab>
+
+</Tabs>
+
+## Environment Variables
+
+```env
+SSO_CLIENT_ID=CLIENT_ID
+SSO_CLIENT_SECRET=CLIENT_SECRET
+SSO_BASE_URL=https://sso.doscom.org
+```

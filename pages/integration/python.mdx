@@ -1,0 +1,212 @@
+---
+title: Integrasi Python
+---
+
+import { Callout, Tabs, Tab } from 'nextra/components'
+
+# Integrasi Python (Django / Flask / FastAPI)
+
+Gunakan library `authlib` — implementasi OAuth2/OIDC terlengkap untuk Python,
+mendukung semua framework populer.
+
+## Instalasi
+
+```bash
+pip install authlib httpx
+# atau pakai requests:
+pip install authlib requests
+```
+
+## Setup (Django / Flask)
+
+```python
+# sso_client.py
+import os
+from authlib.integrations.requests_client import OAuth2Session
+
+SSO_BASE_URL = os.environ.get('SSO_BASE_URL', 'https://sso.doscom.org')
+CLIENT_ID     = os.environ['SSO_CLIENT_ID']
+CLIENT_SECRET = os.environ['SSO_CLIENT_SECRET']
+REDIRECT_URI  = 'https://appkamu.com/callback'
+
+def make_client():
+    return OAuth2Session(
+        client_id=CLIENT_ID,
+        client_secret=CLIENT_SECRET,
+        redirect_uri=REDIRECT_URI,
+        scope='openid profile email',
+    )
+```
+
+## Handler Login (Flask)
+
+```python
+from flask import Flask, redirect, session, request, url_for
+from authlib.integrations.flask_client import OAuth
+
+app = Flask(__name__)
+oauth = OAuth(app)
+
+oauth.register(
+    name='doscom_sso',
+    client_id=os.environ['SSO_CLIENT_ID'],
+    client_secret=os.environ['SSO_CLIENT_SECRET'],
+    server_metadata_url='https://sso.doscom.org/.well-known/openid-configuration',
+    client_kwargs={'scope': 'openid profile email'},
+)
+
+@app.route('/login')
+def login():
+    redirect_uri = url_for('callback', _external=True)
+    return oauth.doscom_sso.authorize_redirect(redirect_uri)
+```
+
+## Handler Callback (Flask)
+
+```python
+@app.route('/callback')
+def callback():
+    # Verifikasi state + tukar code → token (termasuk verifikasi id_token)
+    token = oauth.doscom_sso.authorize_access_token()
+
+    # Klaim id_token (sudah diverifikasi: signature, iss, aud, exp)
+    claims = token.get('userinfo')  # sub, name, email, picture
+
+    # Ambil profil dari /userinfo (id, name, email, avatar_url — sesuai scope)
+    resp = oauth.doscom_sso.get('https://sso.doscom.org/userinfo', token=token)
+    userinfo = resp.json()
+
+    session['user']          = userinfo
+    session['access_token']  = token['access_token']
+    session['refresh_token'] = token.get('refresh_token')
+
+    return redirect('/dashboard')
+```
+
+<Callout type="info">
+  `authlib` dengan `server_metadata_url` melakukan auto-discovery — semua URL endpoint
+  dan JWKS diambil otomatis. Verifikasi `id_token` (signature, issuer, audience, expiry)
+  juga dilakukan otomatis.
+
+  Klaim **id_token** memakai `sub` dan `picture`; endpoint **/userinfo** mengembalikan
+  `id`, `avatar_url`, dan `created_at` — keduanya beda format.
+</Callout>
+
+## Integrasi FastAPI
+
+```python
+from fastapi import FastAPI, Request
+from fastapi.responses import RedirectResponse
+from authlib.integrations.starlette_client import OAuth
+from starlette.middleware.sessions import SessionMiddleware
+
+app = FastAPI()
+app.add_middleware(SessionMiddleware, secret_key='rahasia')
+
+oauth = OAuth()
+oauth.register(
+    name='doscom_sso',
+    client_id=os.environ['SSO_CLIENT_ID'],
+    client_secret=os.environ['SSO_CLIENT_SECRET'],
+    server_metadata_url='https://sso.doscom.org/.well-known/openid-configuration',
+    client_kwargs={'scope': 'openid profile email'},
+)
+
+@app.get('/login')
+async def login(request: Request):
+    redirect_uri = request.url_for('callback')
+    return await oauth.doscom_sso.authorize_redirect(request, redirect_uri)
+
+@app.get('/callback')
+async def callback(request: Request):
+    token    = await oauth.doscom_sso.authorize_access_token(request)
+    userinfo = token.get('userinfo')
+    request.session['user'] = dict(userinfo)
+    return RedirectResponse(url='/dashboard')
+```
+
+## Refresh Token Manual
+
+```python
+from authlib.integrations.requests_client import OAuth2Session
+
+client = OAuth2Session(
+    client_id=CLIENT_ID,
+    client_secret=CLIENT_SECRET,
+    token={'refresh_token': old_refresh_token},
+)
+
+# SSO me-rotate refresh token — simpan token baru!
+new_token = client.refresh_token(f'{SSO_BASE_URL}/token/refresh')
+```
+
+## Verifikasi `id_token` Manual
+
+```python
+from authlib.jose import jwt, JsonWebKey
+import requests
+
+# Ambil JWKS dari SSO
+jwks_data = requests.get('https://sso.doscom.org/.well-known/jwks.json').json()
+keys = JsonWebKey.import_key_set(jwks_data)
+
+# Verifikasi signature RS256
+claims = jwt.decode(id_token, keys)
+claims.validate()
+# claims['sub'], claims['email'], claims['picture'], dll.
+```
+
+## Auth API & Avatar
+
+Untuk registrasi/login langsung dan upload avatar (tanpa alur redirect OAuth),
+lihat **[Auth API](/auth-api)** dan **[Avatar](/avatar)**:
+
+<Tabs items={['Login', 'Me', 'Avatar']}>
+
+<Tab>
+
+```python
+import requests
+
+r = requests.post('https://sso.doscom.org/api/auth/login', json={
+    'email': 'budi@doscom.org',
+    'password': 'rahasia123',
+})
+token = r.json()['data']['token']
+```
+
+</Tab>
+
+<Tab>
+
+```python
+r = requests.get('https://sso.doscom.org/api/auth/me',
+                 headers={'Authorization': f'Bearer {token}'})
+user = r.json()['data']
+```
+
+</Tab>
+
+<Tab>
+
+```python
+with open('foto-profil.png', 'rb') as f:
+    r = requests.post(
+        'https://sso.doscom.org/api/avatar',
+        headers={'Authorization': f'Bearer {token}'},
+        files={'avatar': ('foto-profil.png', f, 'image/png')},
+    )
+avatar_url = r.json()['data']['avatar_url']
+```
+
+</Tab>
+
+</Tabs>
+
+## Environment Variables
+
+```env
+SSO_CLIENT_ID=CLIENT_ID
+SSO_CLIENT_SECRET=CLIENT_SECRET
+SSO_BASE_URL=https://sso.doscom.org
+```

@@ -1,0 +1,206 @@
+---
+title: Integrasi Rust
+---
+
+import { Callout, Tabs, Tab } from 'nextra/components'
+
+# Integrasi Rust
+
+Gunakan crate `openidconnect` — implementasi OIDC/OAuth2 standar untuk Rust.
+Bekerja di atas `reqwest` (async) atau `curl` (sync).
+
+## Instalasi
+
+```toml
+# Cargo.toml
+[dependencies]
+openidconnect = "4"
+reqwest = { version = "0.12", features = ["json", "multipart"] }
+tokio = { version = "1", features = ["full"] }
+```
+
+## Setup Client
+
+```rust
+use openidconnect::core::{
+    CoreClient, CoreProvider, CoreProviderMetadata,
+};
+use openidconnect::{
+    ClientId, ClientSecret, IssuerUrl, RedirectUrl, Scope,
+};
+
+use std::env;
+
+fn sso_client() -> Result<CoreClient, Box<dyn std::error::Error>> {
+    let issuer = IssuerUrl::new(env::var("SSO_BASE_URL")?)?;
+    let provider = CoreProvider::discover(issuer, reqwest::blocking::get)?;
+
+    let client = CoreClient::from_provider(
+        provider,
+        ClientId::new(env::var("SSO_CLIENT_ID")?),
+        Some(ClientSecret::new(env::var("SSO_CLIENT_SECRET")?)), // None untuk public client
+    )
+    .set_redirect_uri(RedirectUrl::new(
+        "https://appkamu.com/callback".to_string(),
+    )?);
+
+    Ok(client)
+}
+```
+
+<Callout type="info">
+  `CoreProvider::discover` membaca `/.well-known/openid-configuration` —
+  semua URL endpoint (authorize, token, userinfo, JWKS) terisi otomatis.
+</Callout>
+
+## Handler Login
+
+```rust
+use openidconnect::{
+    AuthenticationFlow, CsrfToken, Nonce, PkceCodeChallenge,
+    OAuth2AuthorizationCode, Scope,
+};
+
+// Bangkitkan PKCE + state, simpan verifier & state di session/cookie,
+// lalu redirect browser ke `auth_url`
+let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
+
+let (auth_url, csrf_token, nonce) = client
+    .authorize_url(
+        AuthenticationFlow::<OAuth2AuthorizationCode>::AuthorizationCode,
+        CsrfToken::new_random,
+        Nonce::new_random,
+    )
+    .add_scope(Scope::new("openid".to_string()))
+    .add_scope(Scope::new("profile".to_string()))
+    .add_scope(Scope::new("email".to_string()))
+    .set_pkce_challenge(pkce_challenge)
+    .url();
+```
+
+## Handler Callback — Tukar Code
+
+```rust
+use openidconnect::core::CoreTokenResponse;
+use openidconnect::{AuthorizationCode, TokenResponse};
+
+// 1. Verifikasi state dari query == csrf_token yang disimpan
+// 2. Tukar code → token (termasuk verifikasi id_token otomatis oleh crate)
+let token_response: CoreTokenResponse = client
+    .exchange_code(AuthorizationCode::new(code))
+    .set_pkce_verifier(pkce_verifier)
+    .request(reqwest::blocking::get)?;
+
+let access_token  = token_response.access_token();
+let refresh_token = token_response.refresh_token();
+let id_token      = token_response.extra_fields().id_token();
+
+// Klaim id_token sudah diverifikasi: signature RS256 via JWKS, iss, aud, exp
+if let Some(id_token) = id_token {
+    let claims = id_token.claims()?;
+    // claims.subject() == sub, claims.email(), claims.name()
+}
+```
+
+## Ambil Profil dari /userinfo
+
+```rust
+use openidconnect::core::CoreUserInfoClaims;
+
+// GET /userinfo dengan Bearer access token
+let userinfo: CoreUserInfoClaims = client
+    .user_info(access_token.clone(), None)?
+    .request(reqwest::blocking::get)?;
+
+// userinfo.name(), userinfo.email() — sesuaikan dengan struct sendiri
+// kalau butuh avatar_url/created_at: parse response JSON manual via reqwest
+```
+
+<Callout type="info">
+  `CoreUserInfoClaims` bawaan hanya memetakan claim standar OIDC (`sub`, `name`,
+  `email`). Field `avatar_url` & `created_at` tidak standar — definisikan struct
+  custom dengan `Deserialize` dan parse sendiri kalau dibutuhkan.
+</Callout>
+
+## Refresh Token
+
+```rust
+use openidconnect::OAuth2TokenResponse;
+
+let new_token: CoreTokenResponse = client
+    .exchange_refresh_token(refresh_token)
+    .request(reqwest::blocking::get)?;
+
+// SSO me-rotate refresh token — simpan token baru!
+```
+
+## Auth API & Avatar
+
+Untuk API JSON langsung, pakai `reqwest` — lihat **[Auth API](/auth-api)** dan **[Avatar](/avatar)**:
+
+<Tabs items={['Login', 'Me', 'Avatar']}>
+
+<Tab>
+
+```rust
+use serde_json::json;
+
+let client = reqwest::blocking::Client::new();
+
+let res: serde_json::Value = client
+    .post("https://sso.doscom.org/api/auth/login")
+    .json(&json!({
+        "email": "budi@doscom.org",
+        "password": "rahasia123",
+    }))
+    .send()?
+    .json()?;
+
+let token = res["data"]["token"].as_str().unwrap();
+```
+
+</Tab>
+
+<Tab>
+
+```rust
+let res: serde_json::Value = client
+    .get("https://sso.doscom.org/api/auth/me")
+    .bearer_auth(token)
+    .send()?
+    .json()?;
+
+let user = &res["data"];
+```
+
+</Tab>
+
+<Tab>
+
+```rust
+use reqwest::blocking::multipart;
+
+let form = multipart::Form::new()
+    .file("avatar", "foto-profil.png")?;
+
+let res: serde_json::Value = client
+    .post("https://sso.doscom.org/api/avatar")
+    .bearer_auth(token)
+    .multipart(form)
+    .send()?
+    .json()?;
+
+let avatar_url = res["data"]["avatar_url"].as_str().unwrap();
+```
+
+</Tab>
+
+</Tabs>
+
+## Environment Variables
+
+```env
+SSO_CLIENT_ID=CLIENT_ID
+SSO_CLIENT_SECRET=CLIENT_SECRET
+SSO_BASE_URL=https://sso.doscom.org
+```

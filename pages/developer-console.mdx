@@ -1,0 +1,116 @@
+---
+title: Developer Console
+---
+
+import { Steps, Callout } from 'nextra/components'
+
+# Developer Console
+
+Developer Console adalah antarmuka web untuk mendaftarkan dan mengelola aplikasi OAuth yang terhubung ke DOSCOM SSO.
+
+URL: `https://sso.doscom.org/developer/login`
+
+<Callout type="info">
+  Akun untuk mengakses Developer Console **hanya dibuat oleh admin/super_admin** — tidak ada pendaftaran mandiri. Hubungi admin DOSCOM untuk mendapatkan akun.
+</Callout>
+
+---
+
+## Login
+
+Masukkan email dan password yang diberikan admin. Setelah login, JWT disimpan di `localStorage` dan kamu otomatis diarahkan ke Dashboard.
+
+---
+
+## Dashboard — Daftar Aplikasi
+
+Dashboard menampilkan semua aplikasi yang terdaftar atas namamu. Untuk **admin** dan **super_admin**, semua aplikasi dari semua developer ditampilkan.
+
+Setiap kartu aplikasi menampilkan:
+- Nama aplikasi dan logo (jika ada)
+- Status aktif/nonaktif
+- Tipe client (`confidential` / `public`)
+- `client_id` (bisa disalin)
+- Daftar `redirect_uri`
+- Tombol aksi: Ubah, Regenerate Secret, Hapus
+
+---
+
+## Daftar Aplikasi Baru
+
+<Steps>
+
+### Buka form registrasi
+
+Di Dashboard, klik tombol **+ Aplikasi baru**.
+
+### Isi data aplikasi
+
+| Field | Keterangan |
+|-------|-----------|
+| **Nama Aplikasi** | Nama yang tampil di halaman login SSO saat user diminta izin |
+| **Tipe Client** | `confidential` — app dengan backend server; `public` — SPA/mobile |
+| **Redirect URIs** | Satu atau lebih URL callback. Wajib `https://`, kecuali `http://localhost` / `http://127.0.0.1` untuk development |
+| **Logo URL** | (opsional) URL gambar logo aplikasi |
+
+### Simpan client_secret
+
+Setelah aplikasi dibuat, `client_secret` **hanya tampil sekali** di halaman ini.
+
+<Callout type="warning">
+  Salin dan simpan `client_secret` di tempat aman (misal: secrets manager, `.env`). Setelah menutup halaman ini, secret **tidak bisa dilihat lagi**.
+</Callout>
+
+Simpan kredensial ke environment variable aplikasimu:
+
+```env
+SSO_CLIENT_ID=nilai_client_id
+SSO_CLIENT_SECRET=nilai_client_secret  # confidential client saja
+SSO_BASE_URL=https://sso.doscom.org
+```
+
+</Steps>
+
+---
+
+## Edit Aplikasi
+
+Dari Dashboard klik **Ubah** di kartu aplikasi. Kamu bisa mengubah:
+
+- Nama aplikasi
+- Daftar Redirect URI
+- Logo URL
+- Status aktif/nonaktif
+
+### Regenerate Client Secret
+
+Jika `client_secret` bocor atau perlu diganti:
+
+1. Di Dashboard, klik **Regenerate secret** di kartu aplikasi — atau
+2. Di halaman Edit, gunakan tombol **Regenerate Secret**.
+
+<Callout type="warning">
+  Secret lama **langsung tidak berlaku** saat regenerate. Semua instance aplikasimu yang masih memakai secret lama akan gagal autentikasi sampai secret diperbarui.
+</Callout>
+
+---
+
+## Hapus Aplikasi
+
+Klik **Hapus** di kartu aplikasi dan konfirmasi di dialog yang muncul.
+
+Efek penghapusan:
+- Aplikasi di-nonaktifkan (`is_active = false`)
+- **Semua refresh token dan access token** yang terkait langsung dicabut (revoke)
+- User yang sedang menggunakan aplikasi tersebut akan ter-logout otomatis
+
+---
+
+## Aturan Redirect URI
+
+| Aturan | Keterangan |
+|--------|-----------|
+| Wajib `https://` | Untuk production |
+| `http://localhost` atau `http://127.0.0.1` | Diizinkan untuk development |
+| Tanpa fragment (`#`) | URL fragment dilarang sesuai RFC 6749 |
+| Exact-match | SSO memverifikasi `redirect_uri` secara exact — tidak ada wildcard |

@@ -1,0 +1,117 @@
+---
+title: Admin — Kelola User
+---
+
+import { Callout } from 'nextra/components'
+
+# Admin — Kelola User
+
+Halaman manajemen user tersedia di:
+
+```
+https://sso.doscom.org/admin/users
+```
+
+<Callout type="warning">
+  Halaman ini hanya bisa diakses oleh pengguna dengan role **admin** atau **super_admin**.
+  Tombol "Kelola User" di Developer Console hanya muncul untuk role tersebut.
+</Callout>
+
+---
+
+## Daftar User
+
+Tabel user menampilkan: ID, Nama, Email, Role, Status Developer, dan waktu dibuat.
+
+---
+
+## Role & Hak Akses
+
+| Role | Hak Akses |
+|------|-----------|
+| `super_admin` | Semua operasi: buat/ubah/hapus user (termasuk buat admin), kelola semua app |
+| `admin` | Lihat user, kelola semua app developer (buat/ubah/hapus app milik siapapun) |
+| `member` | Hanya bisa login via SSO, kelola app milik sendiri saja |
+
+<Callout type="info">
+  **Hanya `super_admin`** yang bisa membuat/mengubah/menghapus user. `admin` hanya punya akses baca user.
+  Role `super_admin` tidak bisa dipilih saat membuat user dari UI — di-set langsung via API atau seeder awal.
+</Callout>
+
+---
+
+## Buat User Baru
+
+Field yang diisi saat membuat user:
+
+| Field | Keterangan | Validasi |
+|-------|-----------|----------|
+| **Nama** | Nama lengkap user | min 3, maks 100 karakter |
+| **Email** | Alamat email (unik) | format email valid, maks 150 karakter |
+| **Password** | Password awal | min 8, maks 72 karakter |
+| **Role** | `member` (default) atau `admin` | |
+| **Is Developer** | Centang jika user boleh daftar OAuth app | boolean |
+
+---
+
+## Edit User
+
+Semua field bisa diubah kecuali password. Untuk reset password, hapus dan buat ulang user (atau buat endpoint reset password terpisah).
+
+Field yang bisa diubah via `PUT /api/users/:id`:
+- `name`
+- `email`
+- `role` (`admin` atau `member`)
+- `is_developer`
+
+---
+
+## Hapus User
+
+Klik tombol **Hapus** di baris user, konfirmasi di dialog. User dihapus secara **soft delete** (data tersimpan di DB, tidak muncul di list).
+
+---
+
+## API Endpoint User (untuk integrasi programatik)
+
+Semua endpoint butuh JWT Bearer token dengan role yang sesuai.
+
+| Method | Path | Role | Keterangan |
+|--------|------|------|-----------|
+| `GET` | `/api/users` | admin, super_admin | List semua user |
+| `GET` | `/api/users/:id` | admin, super_admin | Detail user |
+| `POST` | `/api/users` | super_admin | Buat user baru |
+| `PUT` | `/api/users/:id` | super_admin | Update user |
+| `DELETE` | `/api/users/:id` | super_admin | Hapus user (soft delete) |
+
+**Contoh buat user via API:**
+
+```bash
+curl -X POST https://sso.doscom.org/api/users \
+  -H "Authorization: Bearer TOKEN_SUPER_ADMIN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Budi Santoso",
+    "email": "budi@doscom.org",
+    "password": "password123",
+    "role": "member",
+    "is_developer": true
+  }'
+```
+
+**Response `201 Created`:**
+
+```json
+{
+  "status": true,
+  "message": "user created",
+  "data": {
+    "id": 5,
+    "name": "Budi Santoso",
+    "email": "budi@doscom.org",
+    "role": "member",
+    "is_developer": true,
+    "created_at": "2025-01-01T00:00:00Z"
+  }
+}
+```

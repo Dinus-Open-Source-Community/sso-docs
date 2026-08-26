@@ -1,0 +1,186 @@
+---
+title: Integrasi Java
+---
+
+import { Callout, Tabs, Tab } from 'nextra/components'
+
+# Integrasi Java
+
+Contoh berikut framework-agnostic — hanya memakai `java.net.http.HttpClient`
+(JDK 11+), tanpa dependency tambahan. Cocok untuk Spring Boot, Quarkus, atau
+servlet app apapun.
+
+## Setup Client
+
+```java
+import java.net.http.HttpClient;
+
+public final class SsoConfig {
+    public static final String BASE_URL   = "https://sso.doscom.org";
+    public static final String CLIENT_ID  = System.getenv("SSO_CLIENT_ID");
+    public static final String CLIENT_SECRET = System.getenv("SSO_CLIENT_SECRET");
+    public static final String REDIRECT_URI = "https://appkamu.com/callback";
+
+    public static final HttpClient HTTP = HttpClient.newHttpClient();
+}
+```
+
+## Handler Login
+
+```java
+import java.net.URI;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
+import java.util.Base64;
+
+// Bangkitkan PKCE (S256) + state, simpan di session/cookie, lalu redirect
+public String authorizeUrl(String state, String codeVerifier) throws Exception {
+    // code_challenge = BASE64URL(SHA256(code_verifier))
+    byte[] digest = MessageDigest.getInstance("SHA-256")
+        .digest(codeVerifier.getBytes(StandardCharsets.US_ASCII));
+    String challenge = Base64.getUrlEncoder().withoutPadding().encodeToString(digest);
+
+    return SsoConfig.BASE_URL + "/authorize"
+        + "?client_id=" + enc(SsoConfig.CLIENT_ID)
+        + "&redirect_uri=" + enc(SsoConfig.REDIRECT_URI)
+        + "&response_type=code"
+        + "&scope=" + enc("openid profile email")
+        + "&state=" + enc(state)
+        + "&code_challenge=" + enc(challenge)
+        + "&code_challenge_method=S256";
+}
+
+// Helper: verifier & state acak
+public static String randomToken() {
+    byte[] b = new byte[32];
+    new SecureRandom().nextBytes(b);
+    return Base64.getUrlEncoder().withoutPadding().encodeToString(b);
+}
+
+static String enc(String s) {
+    return URLEncoder.encode(s, StandardCharsets.UTF_8);
+}
+```
+
+## Handler Callback — Tukar Code
+
+```java
+import java.net.URI;
+import java.net.URLEncoder;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+// POST /token (application/x-www-form-urlencoded)
+public JsonNode exchangeCode(String code, String codeVerifier) throws Exception {
+    String form = "grant_type=authorization_code"
+        + "&code=" + enc(code)
+        + "&redirect_uri=" + enc(SsoConfig.REDIRECT_URI)
+        + "&client_id=" + enc(SsoConfig.CLIENT_ID)
+        + (SsoConfig.CLIENT_SECRET.isEmpty() ? "" : "&client_secret=" + enc(SsoConfig.CLIENT_SECRET))
+        + "&code_verifier=" + enc(codeVerifier);
+
+    HttpRequest req = HttpRequest.newBuilder(URI.create(SsoConfig.BASE_URL + "/token"))
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .POST(HttpRequest.BodyPublishers.ofString(form))
+        .build();
+
+    HttpResponse<String> resp = SsoConfig.HTTP.send(req, HttpResponse.BodyHandlers.ofString());
+    if (resp.statusCode() != 200) {
+        throw new IllegalStateException("/token -> " + resp.statusCode() + ": " + resp.body());
+    }
+    return new ObjectMapper().readTree(resp.body());
+    // access_token, refresh_token, id_token, expires_in
+}
+```
+
+## Ambil Profil dari /userinfo
+
+```java
+public JsonNode userinfo(String accessToken) throws Exception {
+    HttpRequest req = HttpRequest.newBuilder(URI.create(SsoConfig.BASE_URL + "/userinfo"))
+        .header("Authorization", "Bearer " + accessToken)
+        .GET().build();
+
+    HttpResponse<String> resp = SsoConfig.HTTP.send(req, HttpResponse.BodyHandlers.ofString());
+    return new ObjectMapper().readTree(resp.body());
+    // id, name, email, avatar_url, created_at (sesuai scope)
+}
+```
+
+<Callout type="info">
+  Verifikasi `id_token` secara lokal: unduh JWKS dari `/.well-known/jwks.json` dan
+  verifikasi signature RS256 dengan library seperti `com.auth0:java-jwt` atau
+  `com.nimbusds:nimbus-jose-jwt` (cek `iss` = base URL SSO, `aud` = client_id, `exp`).
+</Callout>
+
+## Auth API & Avatar
+
+Lihat **[Auth API](/auth-api)** dan **[Avatar](/avatar)**:
+
+<Tabs items={['Login', 'Me', 'Avatar']}>
+
+<Tab>
+
+```java
+// POST /api/auth/login → JWT untuk /api/*
+String json = """
+    {"email": "budi@doscom.org", "password": "rahasia123"}
+    """;
+HttpRequest req = HttpRequest.newBuilder(URI.create(SsoConfig.BASE_URL + "/api/auth/login"))
+    .header("Content-Type", "application/json")
+    .POST(HttpRequest.BodyPublishers.ofString(json))
+    .build();
+JsonNode body = new ObjectMapper()
+    .readTree(SsoConfig.HTTP.send(req, HttpResponse.BodyHandlers.ofString()).body());
+String token = body.path("data").path("token").asText();
+```
+
+</Tab>
+
+<Tab>
+
+```java
+HttpRequest req = HttpRequest.newBuilder(URI.create(SsoConfig.BASE_URL + "/api/auth/me"))
+    .header("Authorization", "Bearer " + token)
+    .GET().build();
+JsonNode user = new ObjectMapper()
+    .readTree(SsoConfig.HTTP.send(req, HttpResponse.BodyHandlers.ofString()).body())
+    .path("data");
+```
+
+</Tab>
+
+<Tab>
+
+```java
+// Multipart upload (java.net.http tidak punya builder multipart — buat manual
+// atau pakai Spring's RestTemplate / OkHttp yang punya multipart bawaan)
+var rest = new RestTemplate();
+var headers = new HttpHeaders();
+headers.setBearerAuth(token);
+headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+
+var body = new LinkedMultiValueMap<String, Object>();
+body.add("avatar", new FileSystemResource("foto-profil.png"));
+
+var entity = new HttpEntity<>(body, headers);
+var res = rest.postForEntity(SsoConfig.BASE_URL + "/api/avatar", entity, Map.class);
+// res.getBody().get("data").get("avatar_url")
+```
+
+</Tab>
+
+</Tabs>
+
+## Environment Variables
+
+```env
+SSO_CLIENT_ID=CLIENT_ID
+SSO_CLIENT_SECRET=CLIENT_SECRET
+SSO_BASE_URL=https://sso.doscom.org
+```

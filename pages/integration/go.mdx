@@ -1,0 +1,184 @@
+---
+title: Integrasi Go (ssoauth)
+---
+
+import { Callout } from 'nextra/components'
+
+# Integrasi Go — Package `ssoauth`
+
+Package `ssoauth` adalah Go client resmi untuk DOSCOM SSO. Menangani PKCE, state,
+token exchange, verifikasi JWT via JWKS, refresh, dan revoke.
+
+Contoh aplikasi lengkap yang memakai package ini: `dummyweb1` dan `dummyweb2`
+di repo `sso-auth` (alur `/authorize` → `/callback` → `Exchange` → `Userinfo`).
+
+## Instalasi
+
+```go
+// go.mod
+require github.com/Dinus-Open-Source-Community/sso-auth v0.0.0
+
+replace github.com/Dinus-Open-Source-Community/sso-auth => /path/ke/sso-auth
+```
+
+```bash
+go get github.com/Dinus-Open-Source-Community/sso-auth/ssoauth
+```
+
+## Setup Client
+
+```go
+import "github.com/Dinus-Open-Source-Community/sso-auth/ssoauth"
+
+client := ssoauth.New(ssoauth.Config{
+    BaseURL:      "https://sso.doscom.org",
+    ClientID:     "CLIENT_ID",
+    ClientSecret: "CLIENT_SECRET", // kosong ("") untuk public client
+    RedirectURI:  "https://appkamu.com/callback",
+    Scope:        "openid profile email", // opsional — ini default-nya
+})
+```
+
+`Client` aman dipakai concurrent — buat sekali di `init`/startup, pakai di semua handler.
+
+## Handler Login
+
+```go
+func loginHandler(w http.ResponseWriter, r *http.Request) {
+    // Bangkitkan PKCE (untuk public client) dan state
+    verifier, challenge, err := ssoauth.NewPKCE()
+    if err != nil {
+        http.Error(w, "gagal generate PKCE", http.StatusInternalServerError)
+        return
+    }
+    state := ssoauth.NewState()
+
+    // Simpan dulu di cookie (HttpOnly) sebelum redirect ke SSO
+    http.SetCookie(w, &http.Cookie{Name: "pkce_verifier", Value: verifier, HttpOnly: true, Path: "/"})
+    http.SetCookie(w, &http.Cookie{Name: "oauth_state",   Value: state,    HttpOnly: true, Path: "/"})
+
+    // Redirect ke SSO
+    http.Redirect(w, r, client.AuthorizeURL(state, challenge), http.StatusFound)
+}
+```
+
+<Callout type="info">
+  Untuk **confidential client** (ada `ClientSecret`), PKCE opsional — tapi tetap
+  direkomendasikan. Untuk **public client**, PKCE wajib. Kirimkan `challenge` ke
+  `AuthorizeURL` dan `verifier` ke `Exchange`.
+</Callout>
+
+## Handler Callback
+
+```go
+func callbackHandler(w http.ResponseWriter, r *http.Request) {
+    // 1. Ambil state + verifier dari cookie
+    stateCookie, _ := r.Cookie("oauth_state")
+    verifierCookie, _ := r.Cookie("pkce_verifier")
+
+    // 2. Cek error dari SSO (user menolak / membatalkan)
+    if e := r.URL.Query().Get("error"); e != "" {
+        http.Error(w, "SSO menolak: "+e, http.StatusUnauthorized)
+        return
+    }
+
+    // 3. Verifikasi state (CSRF protection)
+    if r.URL.Query().Get("state") != stateCookie.Value {
+        http.Error(w, "state mismatch", http.StatusBadRequest)
+        return
+    }
+
+    // 4. Tukar code dengan token
+    tokens, err := client.Exchange(
+        r.Context(),
+        r.URL.Query().Get("code"),
+        verifierCookie.Value, // kosong ("") untuk confidential client tanpa PKCE
+    )
+    if err != nil {
+        http.Error(w, "token exchange gagal: "+err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    // 5. Ambil profil user dari /userinfo
+    user, err := client.Userinfo(r.Context(), tokens.AccessToken)
+    if err != nil {
+        http.Error(w, "ambil /userinfo gagal: "+err.Error(), http.StatusInternalServerError)
+        return
+    }
+    // user["id"], user["name"], user["email"], user["avatar_url"]
+
+    // 6. (Opsional) Verifikasi id_token — signature RS256 via JWKS, iss, aud, exp.
+    //    Key di-cache otomatis, refresh sekali kalau gagal (rotasi RSA key).
+    claims, err := client.VerifyIDToken(r.Context(), tokens.IDToken)
+    if err != nil {
+        http.Error(w, "id_token tidak valid", http.StatusUnauthorized)
+        return
+    }
+    _ = claims // claims["sub"], claims["name"], claims["email"], claims["picture"]
+
+    // 7. Simpan session user
+    //    simpan tokens.AccessToken, tokens.RefreshToken, user
+
+    // Hapus cookie sementara
+    http.SetCookie(w, &http.Cookie{Name: "pkce_verifier", MaxAge: -1, Path: "/"})
+    http.SetCookie(w, &http.Cookie{Name: "oauth_state",   MaxAge: -1, Path: "/"})
+
+    http.Redirect(w, r, "/dashboard", http.StatusFound)
+}
+```
+
+## Refresh Token
+
+```go
+newTokens, err := client.Refresh(ctx, oldRefreshToken)
+if err != nil {
+    // Refresh token expired / dicabut → minta user login ulang
+}
+// SSO me-rotate refresh token: token lama mati, simpan newTokens.RefreshToken
+```
+
+## Logout & Revoke
+
+```go
+func logoutHandler(w http.ResponseWriter, r *http.Request) {
+    // Cabut refresh token di SSO (best-effort)
+    ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+    defer cancel()
+    _ = client.Revoke(ctx, refreshToken)
+
+    // Hapus session lokal + cookie
+    // ...
+    http.Redirect(w, r, "/", http.StatusFound)
+}
+```
+
+`Revoke` juga bisa dipakai untuk access token. RFC 7009 — token tak dikenal tetap dianggap sukses.
+
+## Referensi API Package
+
+| Fungsi | Keterangan |
+|--------|-----------|
+| `ssoauth.New(cfg)` | Buat client baru (`Config{BaseURL, ClientID, ClientSecret, RedirectURI, Scope, HTTPClient}`) |
+| `client.AuthorizeURL(state, codeChallenge)` | URL redirect ke `/authorize` |
+| `ssoauth.NewPKCE()` | Bangkitkan `(verifier, challenge, err)` S256 |
+| `ssoauth.NewState()` | Bangkitkan state acak |
+| `client.Exchange(ctx, code, codeVerifier)` | Tukar auth code → `*TokenSet` |
+| `client.Refresh(ctx, refreshToken)` | Refresh access token → `*TokenSet` baru |
+| `client.Revoke(ctx, token)` | Cabut token |
+| `client.Userinfo(ctx, accessToken)` | Ambil profil user → `map[string]any` |
+| `client.VerifyIDToken(ctx, idToken)` | Verifikasi JWT via JWKS (cache otomatis) → `jwt.MapClaims` |
+
+`TokenSet`: `{access_token, token_type, expires_in, refresh_token, id_token, scope}`.
+
+## API Auth & Avatar
+
+Butuh registrasi/login/upload avatar langsung dari Go (bukan alur OAuth)? Lihat
+**[Auth API](/auth-api)** dan **[Avatar](/avatar)**:
+
+```go
+// Login → JWT untuk /api/*
+payload := []byte(`{"email":"budi@doscom.org","password":"rahasia123"}`)
+resp, _ := http.Post("https://sso.doscom.org/api/auth/login",
+    "application/json", bytes.NewReader(payload))
+// → data.token → kirim sebagai Authorization: Bearer <token> ke /api/auth/me, /api/avatar
+```

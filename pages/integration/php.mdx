@@ -1,0 +1,193 @@
+---
+title: Integrasi PHP
+---
+
+import { Callout, Tabs, Tab } from 'nextra/components'
+
+# Integrasi PHP (Laravel / Vanilla)
+
+Gunakan library `league/oauth2-client` yang sudah menjadi standar di ekosistem PHP.
+
+## Instalasi
+
+```bash
+composer require league/oauth2-client
+composer require guzzlehttp/guzzle  # untuk Auth API & Avatar
+```
+
+## Setup Provider
+
+```php
+<?php
+// config/sso.php atau langsung di controller
+
+use League\OAuth2\Client\Provider\GenericProvider;
+
+$provider = new GenericProvider([
+    'clientId'                => env('SSO_CLIENT_ID'),
+    'clientSecret'            => env('SSO_CLIENT_SECRET'), // '' untuk public client
+    'redirectUri'             => 'https://appkamu.com/callback',
+    'urlAuthorize'            => 'https://sso.doscom.org/authorize',
+    'urlAccessToken'          => 'https://sso.doscom.org/token',
+    'urlResourceOwnerDetails' => 'https://sso.doscom.org/userinfo',
+]);
+```
+
+## Handler Login
+
+```php
+<?php
+// routes/web.php atau controller
+
+Route::get('/login/sso', function () use ($provider) {
+    // State otomatis di-generate library
+    $authUrl = $provider->getAuthorizationUrl([
+        'scope' => ['openid', 'profile', 'email'],
+    ]);
+
+    // Simpan state di session untuk verifikasi CSRF
+    session(['oauth2state' => $provider->getState()]);
+
+    return redirect($authUrl);
+});
+```
+
+<Callout type="info">
+  `league/oauth2-client` **v2.7+** mendukung PKCE (`$provider->enablePkce()` sebelum
+  `getAuthorizationUrl` — verifier disimpan otomatis di session).
+  Untuk **public client** (tanpa secret), PKCE wajib — aktifkan fitur ini.
+  Untuk **confidential client** (ada secret), PKCE opsional.
+</Callout>
+
+## Handler Callback
+
+```php
+Route::get('/callback', function (Request $request) use ($provider) {
+    // Verifikasi state (CSRF)
+    if ($request->state !== session('oauth2state')) {
+        abort(400, 'State mismatch — kemungkinan CSRF attack');
+    }
+
+    // Tukar code dengan token
+    $token = $provider->getAccessToken('authorization_code', [
+        'code' => $request->code,
+    ]);
+
+    // Ambil data user dari /userinfo
+    // Response: id, name, email, avatar_url, created_at (sesuai scope)
+    $user = $provider->getResourceOwner($token);
+    $userArray = $user->toArray();
+
+    // Simpan ke session
+    session([
+        'user'          => $userArray,
+        'access_token'  => $token->getToken(),
+        'refresh_token' => $token->getRefreshToken(),
+        'expires'       => $token->getExpires(),
+    ]);
+
+    return redirect('/dashboard');
+});
+```
+
+## Refresh Token
+
+```php
+$existingToken = new \League\OAuth2\Client\Token\AccessToken([
+    'access_token'  => session('access_token'),
+    'refresh_token' => session('refresh_token'),
+    'expires'       => session('expires'),
+]);
+
+if ($existingToken->hasExpired()) {
+    // SSO me-rotate refresh token — simpan token baru!
+    $newToken = $provider->getAccessToken('refresh_token', [
+        'refresh_token' => $existingToken->getRefreshToken(),
+    ]);
+
+    session([
+        'access_token'  => $newToken->getToken(),
+        'refresh_token' => $newToken->getRefreshToken(),
+        'expires'       => $newToken->getExpires(),
+    ]);
+}
+```
+
+## Verifikasi `id_token` (JWT)
+
+`league/oauth2-client` tidak verifikasi `id_token` secara otomatis.
+Untuk verifikasi, gunakan `firebase/php-jwt`:
+
+```bash
+composer require firebase/php-jwt
+```
+
+```php
+use Firebase\JWT\JWT;
+use Firebase\JWT\JWK;
+
+// Ambil JWKS dari SSO
+$jwks = json_decode(file_get_contents('https://sso.doscom.org/.well-known/jwks.json'), true);
+$keys = JWK::parseKeySet($jwks);
+
+// Verifikasi signature RS256 (cek iss/aud/exp sesuai kebutuhan aplikasi)
+$decoded = JWT::decode($idToken, $keys);
+// $decoded->sub, $decoded->email, $decoded->picture, dll.
+```
+
+## Auth API & Avatar
+
+Untuk registrasi/login langsung dan upload avatar (tanpa alur redirect OAuth),
+lihat **[Auth API](/auth-api)** dan **[Avatar](/avatar)**:
+
+<Tabs items={['Login', 'Me', 'Avatar']}>
+
+<Tab>
+
+```php
+$client = new \GuzzleHttp\Client(['base_uri' => 'https://sso.doscom.org']);
+
+$res = $client->post('/api/auth/login', [
+    'json' => ['email' => 'budi@doscom.org', 'password' => 'rahasia123'],
+]);
+$token = json_decode($res->getBody(), true)['data']['token'];
+```
+
+</Tab>
+
+<Tab>
+
+```php
+$res = $client->get('/api/auth/me', [
+    'headers' => ['Authorization' => 'Bearer ' . $token],
+]);
+$user = json_decode($res->getBody(), true)['data'];
+```
+
+</Tab>
+
+<Tab>
+
+```php
+$res = $client->post('/api/avatar', [
+    'headers' => ['Authorization' => 'Bearer ' . $token],
+    'multipart' => [[
+        'name'     => 'avatar',
+        'contents' => fopen('/path/ke/foto.png', 'r'),
+        'filename' => 'foto.png',
+    ]],
+]);
+$avatarUrl = json_decode($res->getBody(), true)['data']['avatar_url'];
+```
+
+</Tab>
+
+</Tabs>
+
+## Environment Variables (.env Laravel)
+
+```env
+SSO_CLIENT_ID=CLIENT_ID
+SSO_CLIENT_SECRET=CLIENT_SECRET
+SSO_BASE_URL=https://sso.doscom.org
+```

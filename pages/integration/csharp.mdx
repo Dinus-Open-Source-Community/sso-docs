@@ -1,0 +1,209 @@
+---
+title: Integrasi C# (.NET)
+---
+
+import { Callout, Tabs, Tab } from 'nextra/components'
+
+# Integrasi C# (.NET)
+
+Contoh berikut memakai `HttpClient` bawaan .NET (ASP.NET Core minimal API) —
+tanpa package tambahan. Pola yang sama berlaku untuk Blazor, MVC, atau worker.
+
+## Setup
+
+```csharp
+// SsoOptions.cs
+public static class SsoOptions
+{
+    public const string BaseUrl       = "https://sso.doscom.org";
+    public static string ClientId     => Environment.GetEnvironmentVariable("SSO_CLIENT_ID")!;
+    public static string ClientSecret => Environment.GetEnvironmentVariable("SSO_CLIENT_SECRET") ?? "";
+    public static string RedirectUri  => "https://appkamu.com/callback";
+
+    public static readonly HttpClient Http = new HttpClient();
+}
+```
+
+## Handler Login
+
+```csharp
+using System.Security.Cryptography;
+using System.Text;
+using System.Web;
+
+// Bangkitkan PKCE (S256) + state, simpan di session/cookie, lalu redirect
+public static string AuthorizeUrl(string state, string codeVerifier)
+{
+    // code_challenge = BASE64URL(SHA256(code_verifier))
+    var digest = SHA256.HashData(Encoding.ASCII.GetBytes(codeVerifier));
+    var challenge = Convert.ToBase64String(digest)
+        .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+    var q = new Dictionary<string, string>
+    {
+        ["client_id"]             = SsoOptions.ClientId,
+        ["redirect_uri"]          = SsoOptions.RedirectUri,
+        ["response_type"]         = "code",
+        ["scope"]                 = "openid profile email",
+        ["state"]                 = state,
+        ["code_challenge"]        = challenge,
+        ["code_challenge_method"] = "S256",
+    };
+    var qs = string.Join("&", q.Select(kv =>
+        $"{HttpUtility.UrlEncode(kv.Key)}={HttpUtility.UrlEncode(kv.Value)}"));
+
+    return $"{SsoOptions.BaseUrl}/authorize?{qs}";
+}
+
+// Helper: token acak untuk state / verifier
+public static string RandomToken()
+{
+    var bytes = RandomNumberGenerator.GetBytes(32);
+    return Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+}
+```
+
+## Handler Callback — Tukar Code
+
+```csharp
+using System.Net.Http.Json;
+using System.Text.Json;
+
+public record TokenResponse(
+    [property: JsonPropertyName("access_token")]  string AccessToken,
+    [property: JsonPropertyName("token_type")]    string TokenType,
+    [property: JsonPropertyName("expires_in")]    int ExpiresIn,
+    [property: JsonPropertyName("refresh_token")] string? RefreshToken,
+    [property: JsonPropertyName("id_token")]      string? IdToken,
+    [property: JsonPropertyName("scope")]         string? Scope
+);
+
+public static async Task<TokenResponse> ExchangeAsync(string code, string codeVerifier)
+{
+    // 1. Verifikasi state dari query terhadap state yang disimpan (CSRF)!
+
+    // 2. Tukar code → token
+    var form = new Dictionary<string, string>
+    {
+        ["grant_type"]    = "authorization_code",
+        ["code"]          = code,
+        ["redirect_uri"]  = SsoOptions.RedirectUri,
+        ["client_id"]     = SsoOptions.ClientId,
+        ["code_verifier"] = codeVerifier, // kosongkan untuk confidential tanpa PKCE
+    };
+    if (SsoOptions.ClientSecret != "")
+        form["client_secret"] = SsoOptions.ClientSecret;
+
+    var resp = await SsoOptions.Http.PostAsync(
+        $"{SsoOptions.BaseUrl}/token",
+        new FormUrlEncodedContent(form));
+
+    resp.EnsureSuccessStatusCode();
+    return (await resp.Content.ReadFromJsonAsync<TokenResponse>())!;
+}
+```
+
+## Ambil Profil dari /userinfo
+
+```csharp
+public static async Task<JsonElement> UserinfoAsync(string accessToken)
+{
+    using var req = new HttpRequestMessage(HttpMethod.Get,
+        $"{SsoOptions.BaseUrl}/userinfo");
+    req.Headers.Authorization = new("Bearer", accessToken);
+
+    var resp = await SsoOptions.Http.SendAsync(req);
+    resp.EnsureSuccessStatusCode();
+    return await resp.Content.ReadFromJsonAsync<JsonElement>();
+    // id, name, email, avatar_url, created_at (sesuai scope)
+}
+```
+
+<Callout type="info">
+  Verifikasi `id_token` secara lokal: unduh JWKS dari `/.well-known/jwks.json` dan
+  verifikasi signature RS256 dengan `System.IdentityModel.Tokens.Jwt`
+  (`JwtSecurityTokenHandler` + `JsonWebKeySet`). Cek `iss` = base URL SSO,
+  `aud` = client_id, `exp`.
+</Callout>
+
+## Refresh Token
+
+```csharp
+var form = new Dictionary<string, string>
+{
+    ["grant_type"]    = "refresh_token",
+    ["refresh_token"] = oldRefreshToken,
+    ["client_id"]     = SsoOptions.ClientId,
+};
+if (SsoOptions.ClientSecret != "")
+    form["client_secret"] = SsoOptions.ClientSecret;
+
+// SSO me-rotate refresh token — simpan refresh_token baru dari response!
+var resp = await SsoOptions.Http.PostAsync(
+    $"{SsoOptions.BaseUrl}/token/refresh",
+    new FormUrlEncodedContent(form));
+```
+
+## Auth API & Avatar
+
+Lihat **[Auth API](/auth-api)** dan **[Avatar](/avatar)**:
+
+<Tabs items={['Login', 'Me', 'Avatar']}>
+
+<Tab>
+
+```csharp
+// POST /api/auth/login → JWT untuk /api/*
+var resp = await SsoOptions.Http.PostAsJsonAsync(
+    $"{SsoOptions.BaseUrl}/api/auth/login",
+    new { email = "budi@doscom.org", password = "rahasia123" });
+
+var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+var token = body.GetProperty("data").GetProperty("token").GetString();
+```
+
+</Tab>
+
+<Tab>
+
+```csharp
+using var req = new HttpRequestMessage(HttpMethod.Get,
+    $"{SsoOptions.BaseUrl}/api/auth/me");
+req.Headers.Authorization = new("Bearer", token);
+
+var resp = await SsoOptions.Http.SendAsync(req);
+var user = (await resp.Content.ReadFromJsonAsync<JsonElement>())
+    .GetProperty("data");
+```
+
+</Tab>
+
+<Tab>
+
+```csharp
+using var content = new MultipartFormDataContent();
+
+await using var stream = File.OpenRead("foto-profil.png");
+content.Add(new StreamContent(stream), "avatar", "foto-profil.png");
+
+using var req = new HttpRequestMessage(HttpMethod.Post,
+    $"{SsoOptions.BaseUrl}/api/avatar");
+req.Headers.Authorization = new("Bearer", token);
+req.Content = content;
+
+var resp = await SsoOptions.Http.SendAsync(req);
+var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+var avatarUrl = body.GetProperty("data").GetProperty("avatar_url").GetString();
+```
+
+</Tab>
+
+</Tabs>
+
+## Environment Variables
+
+```env
+SSO_CLIENT_ID=CLIENT_ID
+SSO_CLIENT_SECRET=CLIENT_SECRET
+SSO_BASE_URL=https://sso.doscom.org
+```

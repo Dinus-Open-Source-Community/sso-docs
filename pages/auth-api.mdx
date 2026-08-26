@@ -1,0 +1,449 @@
+---
+title: Auth API
+---
+
+import { Callout, Tabs, Tab } from 'nextra/components'
+
+# Auth API — `/api/auth/*`
+
+API JSON untuk mengelola akun DOSCOM secara langsung (tanpa alur redirect OAuth).
+Cocok untuk aplikasi yang butuh registrasi/login sendiri namun tetap memakai
+database user yang sama dengan SSO.
+
+Base URL: `https://sso.doscom.org` (development: `http://localhost:8080`)
+
+## Format Response
+
+Semua endpoint mengembalikan envelope yang sama:
+
+**Sukses** (HTTP 2xx):
+
+```json
+{
+  "status": true,
+  "message": "login success",
+  "data": { }
+}
+```
+
+**Error** (HTTP 4xx/5xx):
+
+```json
+{
+  "status": false,
+  "message": "login failed",
+  "errors": "detail error"
+}
+```
+
+## Autentikasi
+
+Endpoint bertanda 🔒 membutuhkan header:
+
+```http
+Authorization: Bearer TOKEN_JWT
+```
+
+`TOKEN_JWT` didapat dari response `POST /api/auth/login`. Token ini ditandatangani
+HS256 dengan secret milik SSO server — **validasinya dengan memanggil
+`GET /api/auth/me`**, bukan verifikasi lokal seperti `id_token` OAuth.
+
+## Objek User
+
+```json
+{
+  "id": 4,
+  "name": "Budi Santoso",
+  "email": "budi@doscom.org",
+  "avatar_url": "https://cdn.doscom.org/avatars/4.png",
+  "email_verified": true,
+  "created_at": "2025-01-01T00:00:00Z"
+}
+```
+
+---
+
+## POST /api/auth/register
+
+Daftar akun member baru. Sistem mengirim link verifikasi ke email.
+
+<Callout type="warning">
+  Rate limit: 5 percobaan / 15 menit per IP.
+</Callout>
+
+**Request** (`application/json`)
+
+| Field | Wajib | Validasi |
+|-------|-------|----------|
+| `name` | Ya | 3–100 karakter |
+| `email` | Ya | Format email, maks 150 karakter |
+| `password` | Ya | 8–72 karakter |
+
+**Response** `201 Created` — `data` berisi objek user (`email_verified: false`).
+
+**Error**: `409 Conflict` kalau email sudah terdaftar, `400` validasi gagal.
+
+<Tabs items={['curl', 'Go', 'Node.js', 'PHP', 'Python']}>
+
+<Tab>
+
+```bash
+curl -X POST https://sso.doscom.org/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Budi Santoso",
+    "email": "budi@doscom.org",
+    "password": "rahasia123"
+  }'
+```
+
+</Tab>
+
+<Tab>
+
+```go
+payload := `{"name":"Budi Santoso","email":"budi@doscom.org","password":"rahasia123"}`
+resp, err := http.Post("https://sso.doscom.org/api/auth/register",
+    "application/json", strings.NewReader(payload))
+```
+
+</Tab>
+
+<Tab>
+
+```js
+const res = await fetch('https://sso.doscom.org/api/auth/register', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    name: 'Budi Santoso',
+    email: 'budi@doscom.org',
+    password: 'rahasia123',
+  }),
+})
+const body = await res.json() // { status, message, data: { user } }
+```
+
+</Tab>
+
+<Tab>
+
+```php
+$client = new \GuzzleHttp\Client(['base_uri' => 'https://sso.doscom.org']);
+
+$res = $client->post('/api/auth/register', [
+    'json' => [
+        'name'     => 'Budi Santoso',
+        'email'    => 'budi@doscom.org',
+        'password' => 'rahasia123',
+    ],
+]);
+$body = json_decode($res->getBody(), true); // ['status' => true, 'data' => [...]]
+```
+
+</Tab>
+
+<Tab>
+
+```python
+import requests
+
+r = requests.post('https://sso.doscom.org/api/auth/register', json={
+    'name': 'Budi Santoso',
+    'email': 'budi@doscom.org',
+    'password': 'rahasia123',
+})
+body = r.json()  # {'status': True, 'data': {...}}
+```
+
+</Tab>
+
+</Tabs>
+
+---
+
+## GET /api/auth/verify-email
+
+Verifikasi akun via link dari email (endpoint yang diklik user di email).
+
+**Request**: `GET /api/auth/verify-email?token=TOKEN_DARI_EMAIL`
+
+**Response** `200 OK` — `{ "status": true, "message": "email verified" }`
+
+**Error**: `400` kalau token tidak valid / expired.
+
+---
+
+## POST /api/auth/login
+
+Login dengan email & password, mendapatkan JWT untuk API.
+
+**Request** (`application/json`)
+
+| Field | Wajib | Keterangan |
+|-------|-------|-----------|
+| `email` | Ya | |
+| `password` | Ya | |
+
+**Response** `200 OK`
+
+```json
+{
+  "status": true,
+  "message": "login success",
+  "data": {
+    "token": "eyJhbGciOiJIUzI1NiIs...",
+    "type": "Bearer",
+    "user": {
+      "id": 4,
+      "name": "Budi Santoso",
+      "email": "budi@doscom.org",
+      "avatar_url": "...",
+      "email_verified": true,
+      "created_at": "2025-01-01T00:00:00Z"
+    }
+  }
+}
+```
+
+**Error**:
+- `403 Forbidden` — email belum diverifikasi (cek email untuk link verifikasi)
+- `401 Unauthorized` — email/password salah
+
+<Tabs items={['curl', 'Go', 'Node.js', 'PHP', 'Python']}>
+
+<Tab>
+
+```bash
+curl -X POST https://sso.doscom.org/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "budi@doscom.org", "password": "rahasia123"}'
+```
+
+</Tab>
+
+<Tab>
+
+```go
+import (
+    "bytes"
+    "encoding/json"
+    "net/http"
+)
+
+type loginResp struct {
+    Status  bool   `json:"status"`
+    Message string `json:"message"`
+    Data    struct {
+        Token string `json:"token"`
+        Type  string `json:"type"`
+        User  struct {
+            ID        uint   `json:"id"`
+            Name      string `json:"name"`
+            Email     string `json:"email"`
+            AvatarURL string `json:"avatar_url"`
+        } `json:"user"`
+    } `json:"data"`
+}
+
+payload, _ := json.Marshal(map[string]string{
+    "email": "budi@doscom.org", "password": "rahasia123",
+})
+resp, err := http.Post("https://sso.doscom.org/api/auth/login",
+    "application/json", bytes.NewReader(payload))
+if err != nil {
+    // handle error
+}
+defer resp.Body.Close()
+
+var out loginResp
+json.NewDecoder(resp.Body).Decode(&out)
+// simpan out.Data.Token, kirim sebagai "Authorization: Bearer <token>"
+```
+
+</Tab>
+
+<Tab>
+
+```js
+const res = await fetch('https://sso.doscom.org/api/auth/login', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ email: 'budi@doscom.org', password: 'rahasia123' }),
+})
+const { data } = await res.json()
+// data.token → kirim sebagai Authorization: Bearer <token>
+```
+
+</Tab>
+
+<Tab>
+
+```php
+$res = $client->post('/api/auth/login', [
+    'json' => ['email' => 'budi@doscom.org', 'password' => 'rahasia123'],
+]);
+$body = json_decode($res->getBody(), true);
+$token = $body['data']['token'] ?? null;
+```
+
+</Tab>
+
+<Tab>
+
+```python
+import requests
+
+r = requests.post('https://sso.doscom.org/api/auth/login', json={
+    'email': 'budi@doscom.org',
+    'password': 'rahasia123',
+})
+token = r.json()['data']['token']
+```
+
+</Tab>
+
+</Tabs>
+
+---
+
+## GET /api/auth/me 🔒
+
+Profil user dari token JWT yang aktif.
+
+**Request**
+
+```http
+GET /api/auth/me
+Authorization: Bearer TOKEN_JWT
+```
+
+**Response** `200 OK` — `data` berisi objek user.
+
+**Error**: `401` token tidak valid/expired, `404` user tidak ada.
+
+<Tabs items={['curl', 'Go', 'Node.js', 'PHP', 'Python']}>
+
+<Tab>
+
+```bash
+curl https://sso.doscom.org/api/auth/me \
+  -H "Authorization: Bearer TOKEN_JWT"
+```
+
+</Tab>
+
+<Tab>
+
+```go
+req, _ := http.NewRequest("GET", "https://sso.doscom.org/api/auth/me", nil)
+req.Header.Set("Authorization", "Bearer "+token)
+resp, err := http.DefaultClient.Do(req)
+```
+
+</Tab>
+
+<Tab>
+
+```js
+const res = await fetch('https://sso.doscom.org/api/auth/me', {
+  headers: { Authorization: `Bearer ${token}` },
+})
+const { data: user } = await res.json()
+```
+
+</Tab>
+
+<Tab>
+
+```php
+$res = $client->get('/api/auth/me', [
+    'headers' => ['Authorization' => 'Bearer ' . $token],
+]);
+$user = json_decode($res->getBody(), true)['data'];
+```
+
+</Tab>
+
+<Tab>
+
+```python
+r = requests.get('https://sso.doscom.org/api/auth/me',
+                 headers={'Authorization': f'Bearer {token}'})
+user = r.json()['data']
+```
+
+</Tab>
+
+</Tabs>
+
+---
+
+## POST /api/auth/change-password 🔒
+
+Ganti password user yang sedang login (wajib tahu password lama).
+
+**Request** (`application/json`)
+
+| Field | Wajib | Validasi |
+|-------|-------|----------|
+| `current_password` | Ya | |
+| `new_password` | Ya | 8–72 karakter |
+
+**Response** `200 OK` — `{ "status": true, "message": "password changed" }`
+
+**Error**: `400` password lama salah, `401` token tidak valid.
+
+```bash
+curl -X POST https://sso.doscom.org/api/auth/change-password \
+  -H "Authorization: Bearer TOKEN_JWT" \
+  -H "Content-Type: application/json" \
+  -d '{"current_password": "rahasia123", "new_password": "baru45678"}'
+```
+
+---
+
+## POST /api/auth/forgot-password
+
+Kirim link reset password ke email user.
+
+<Callout type="warning">
+  Rate limit: 5 percobaan / 15 menit per IP.
+</Callout>
+
+**Request** (`application/json`)
+
+| Field | Wajib | Keterangan |
+|-------|-------|-----------|
+| `email` | Ya | Email terdaftar |
+
+**Response** `200 OK` — `{ "status": true, "message": "reset link sent to your email" }`
+
+**Error**: `404` email tidak ditemukan.
+
+---
+
+## POST /api/auth/reset-password
+
+Set password baru memakai token dari link email.
+
+<Callout type="warning">
+  Rate limit: 10 percobaan / menit per IP.
+</Callout>
+
+**Request** (`application/json`)
+
+| Field | Wajib | Validasi |
+|-------|-------|----------|
+| `token` | Ya | Token dari link email |
+| `password` | Ya | 8–72 karakter |
+
+**Response** `200 OK` — `{ "status": true, "message": "password reset success" }`
+
+**Error**: `400` token tidak valid / expired.
+
+<Callout type="info">
+  Bedakan dengan alur **lupa password di halaman login SSO** (`POST /forgot-password`
+  & `POST /reset-password` tanpa prefix `/api`) — itu form HTML browser, lihat
+  [Endpoint Referensi](/endpoints).
+</Callout>

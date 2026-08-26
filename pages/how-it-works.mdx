@@ -1,0 +1,173 @@
+---
+title: Cara Kerja SSO
+---
+
+import { Steps, Callout } from 'nextra/components'
+
+# Cara Kerja SSO
+
+DOSCOM SSO mengimplementasikan **Authorization Code Flow** — alur standar OAuth 2.0
+yang dipakai Google, GitHub, dan provider besar lainnya.
+
+## Konsep Dasar
+
+```
+Aplikasimu  ←──HTTP──→  SSO Server  ←──Login──→  User
+```
+
+Aplikasimu **tidak pernah** melihat password user. SSO yang menangani autentikasi,
+lalu mengirimkan token ke aplikasimu sebagai bukti bahwa user sudah login.
+
+## Alur Lengkap (Authorization Code + PKCE)
+
+<Steps>
+
+### Redirect ke SSO
+
+Aplikasi redirect browser user ke endpoint `/authorize` dengan parameter:
+
+```
+GET https://sso.doscom.org/authorize
+  ?client_id=CLIENT_ID
+  &redirect_uri=https://appkamu.com/callback
+  &response_type=code
+  &scope=openid profile email
+  &state=RANDOM_STRING
+  &code_challenge=PKCE_CHALLENGE         ← wajib untuk public client
+  &code_challenge_method=S256
+```
+
+**`state`** wajib diisi — nilai acak yang kamu simpan untuk verifikasi CSRF.
+
+### User Login di SSO
+
+SSO menampilkan halaman login. User memasukkan email/password.
+Kalau user sudah punya session aktif, SSO langsung tampilkan *account chooser*.
+
+### SSO Redirect Balik ke Aplikasi
+
+Setelah login sukses, SSO redirect ke `redirect_uri` kamu dengan:
+
+```
+https://appkamu.com/callback?code=AUTH_CODE&state=STATE_SAMA
+```
+
+Verifikasi bahwa `state` yang diterima sama dengan yang kamu kirim.
+
+### Tukar Code dengan Token
+
+Di server-side (bukan browser), POST ke `/token`:
+
+```http
+POST /token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=authorization_code
+&code=AUTH_CODE
+&redirect_uri=https://appkamu.com/callback
+&client_id=CLIENT_ID
+&client_secret=CLIENT_SECRET          ← untuk confidential client
+&code_verifier=PKCE_VERIFIER          ← untuk public client
+```
+
+Response:
+
+```json
+{
+  "access_token": "eyJ...",
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "refresh_token": "opaque_string",
+  "id_token": "eyJ..."
+}
+```
+
+### Ambil Data User (Opsional)
+
+Pakai `access_token` untuk memanggil `/userinfo`:
+
+```http
+GET /userinfo
+Authorization: Bearer ACCESS_TOKEN
+```
+
+Response (field `name`/`avatar_url` muncul hanya jika scope `profile`, `email` jika scope `email`):
+
+```json
+{
+  "id": 4,
+  "name": "Nama User",
+  "email": "user@doscom.org",
+  "avatar_url": "https://cdn.doscom.org/avatars/4.png",
+  "created_at": "2025-01-01T00:00:00Z"
+}
+```
+
+</Steps>
+
+## Dua Jenis Client
+
+| Tipe | Kapan dipakai | Secret | PKCE |
+|------|--------------|--------|------|
+| **Confidential** | App dengan backend server (Node, Go, PHP, Python) | Ya | Opsional |
+| **Public** | SPA / mobile app (tidak bisa simpan secret) | Tidak | **Wajib** |
+
+<Callout type="info">
+  **Daftar aplikasimu dulu** di Developer Console untuk mendapatkan `client_id` dan `client_secret` — akun dibuat oleh admin sistem, tidak ada pendaftaran mandiri.
+</Callout>
+
+### Cara daftar aplikasi
+
+1. Buka **Developer Console** di `https://sso.doscom.org/developer/login` (login dengan akun dari admin).
+2. Klik **+ Aplikasi baru**, isi nama aplikasi dan pilih tipe client (confidential/public).
+3. Isi **Redirect URI** — alamat callback aplikasimu, misal `https://appkamu.com/callback`.
+4. Setelah dibuat, **simpan `client_secret` segera** — hanya tampil sekali, tidak bisa dilihat lagi.
+
+Aturan redirect URI:
+
+| Ketentuan | Keterangan |
+|-----------|------------|
+| Wajib `https://` | Kecuali `http://localhost` / `http://127.0.0.1` untuk pengembangan |
+| Tanpa fragment (`#`) | URL fragment tidak diperbolehkan (RFC 6749) |
+
+> Client ID/Secret disimpan di environment variable aplikasimu (misal `SSO_CLIENT_ID`), jangan di-commit ke repository.
+
+## Token yang Diterima
+
+| Token | Format | Kegunaan | Masa berlaku |
+|-------|--------|----------|-------------|
+| `access_token` | JWT RS256 | Panggil `/userinfo`, resource API | 1 jam |
+| `id_token` | JWT RS256 | Verifikasi identitas user (OIDC) | 1 jam |
+| `refresh_token` | Opaque string | Perbarui access token tanpa login ulang | 30 hari |
+
+### Verifikasi `id_token`
+
+`id_token` adalah JWT yang bisa diverifikasi secara lokal dengan public key SSO:
+
+```
+JWKS URL: https://sso.doscom.org/.well-known/jwks.json
+Algoritma: RS256
+Issuer (iss): https://sso.doscom.org
+Audience (aud): CLIENT_ID kamu
+```
+
+Gunakan library JWT di bahasamu masing-masing — tidak perlu koneksi ke SSO untuk verifikasi.
+
+## Refresh Token
+
+Refresh token **di-rotate** setiap kali dipakai — token lama langsung tidak berlaku:
+
+```http
+POST /token/refresh
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=refresh_token
+&refresh_token=REFRESH_TOKEN
+&client_id=CLIENT_ID
+&client_secret=CLIENT_SECRET
+```
+
+<Callout type="warning">
+  Simpan refresh token terbaru segera setelah menerima response refresh.
+  Kalau refresh token lama dipakai lagi (reuse), **seluruh token keluarga user di aplikasimu akan dicabut**.
+</Callout>
