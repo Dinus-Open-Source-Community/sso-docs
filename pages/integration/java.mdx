@@ -108,7 +108,7 @@ public JsonNode userinfo(String accessToken) throws Exception {
 
     HttpResponse<String> resp = SsoConfig.HTTP.send(req, HttpResponse.BodyHandlers.ofString());
     return new ObjectMapper().readTree(resp.body());
-    // id, name, email, avatar_url, created_at (sesuai scope)
+    // id, name, email, avatar_url, type, email_verified, created_at
 }
 ```
 

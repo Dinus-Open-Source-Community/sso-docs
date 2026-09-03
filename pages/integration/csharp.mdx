@@ -115,7 +115,7 @@ public static async Task<JsonElement> UserinfoAsync(string accessToken)
     var resp = await SsoOptions.Http.SendAsync(req);
     resp.EnsureSuccessStatusCode();
     return await resp.Content.ReadFromJsonAsync<JsonElement>();
-    // id, name, email, avatar_url, created_at (sesuai scope)
+    // id, name, email, avatar_url, type, email_verified, created_at
 }
 ```
 

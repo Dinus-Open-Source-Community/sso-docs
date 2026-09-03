@@ -74,7 +74,7 @@ Route::get('/callback', function (Request $request) use ($provider) {
     ]);
 
     // Ambil data user dari /userinfo
-    // Response: id, name, email, avatar_url, created_at (sesuai scope)
+    // Response: id, name, email, avatar_url, type, email_verified, created_at
     $user = $provider->getResourceOwner($token);
     $userArray = $user->toArray();
 

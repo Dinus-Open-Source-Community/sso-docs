@@ -71,7 +71,7 @@ get '/callback' do
     code_verifier: session[:pkce_verifier], # nil untuk confidential tanpa PKCE
   )
 
-  # Profil user dari /userinfo (id, name, email, avatar_url — sesuai scope)
+  # Profil user dari /userinfo (profil lengkap user)
   userinfo = token.get('/userinfo').parsed
 
   # Simpan session

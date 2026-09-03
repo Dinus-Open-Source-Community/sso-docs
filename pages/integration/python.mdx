@@ -72,7 +72,7 @@ def callback():
     # Klaim id_token (sudah diverifikasi: signature, iss, aud, exp)
     claims = token.get('userinfo')  # sub, name, email, picture
 
-    # Ambil profil dari /userinfo (id, name, email, avatar_url — sesuai scope)
+    # Ambil profil dari /userinfo (profil lengkap user)
     resp = oauth.doscom_sso.get('https://sso.doscom.org/userinfo', token=token)
     userinfo = resp.json()
 

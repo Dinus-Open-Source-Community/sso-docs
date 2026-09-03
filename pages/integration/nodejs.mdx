@@ -91,7 +91,7 @@ app.get('/callback', async (req, res) => {
   // Klaim id_token (sudah diverifikasi: signature, iss, aud, exp)
   const claims = tokenSet.claims() // sub, name, email, picture
 
-  // Ambil profil dari /userinfo (id, name, email, avatar_url — sesuai scope)
+  // Ambil profil dari /userinfo (profil lengkap user)
   const userinfo = await client.userinfo(tokenSet.access_token)
 
   // Simpan ke session
@@ -105,10 +105,10 @@ app.get('/callback', async (req, res) => {
 ```
 
 <Callout type="info">
-  Klaim `tokenSet.claims()` berasal dari **id_token** (`sub`, `picture`, ...).
-  `client.userinfo()` memanggil endpoint `/userinfo` yang formatnya berbeda:
-  `{ id, name, email, avatar_url, created_at }` — dan `name`/`avatar_url`/`email`
-  hanya muncul sesuai scope yang diminta.
+  Klaim `tokenSet.claims()` berasal dari **id_token** (`sub`, `picture`, ...)
+  dan mengikuti scope yang diminta. `client.userinfo()` memanggil endpoint
+  `/userinfo` yang formatnya berbeda dan **selalu** mengembalikan profil
+  lengkap: `{ id, name, email, avatar_url, type, email_verified, created_at }`.
 </Callout>
 
 ## Refresh Token

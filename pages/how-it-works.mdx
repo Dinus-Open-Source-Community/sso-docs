@@ -91,7 +91,7 @@ GET /userinfo
 Authorization: Bearer ACCESS_TOKEN
 ```
 
-Response (field `name`/`avatar_url` muncul hanya jika scope `profile`, `email` jika scope `email`):
+Response — profil lengkap user (tanpa filtering scope; scope `profile`/`email` hanya memengaruhi klaim di `id_token`):
 
 ```json
 {
@@ -99,6 +99,8 @@ Response (field `name`/`avatar_url` muncul hanya jika scope `profile`, `email` j
   "name": "Nama User",
   "email": "user@doscom.org",
   "avatar_url": "https://cdn.doscom.org/avatars/4.png",
+  "type": "d-form",
+  "email_verified": true,
   "created_at": "2025-01-01T00:00:00Z"
 }
 ```

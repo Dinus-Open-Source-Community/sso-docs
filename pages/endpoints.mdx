@@ -160,9 +160,9 @@ Field `type` menandai asal akun (hasil `POST /api/auth/transfer`):
 `d-form`, `google`, `github`, dll.
 
 <Callout type="info">
-  Field mengikuti scope yang diminta:
-  - `name` dan `avatar_url` hanya ada kalau scope `profile` diminta
-  - `email` hanya ada kalau scope `email` diminta
+  `/userinfo` selalu mengembalikan profil lengkap — tidak ada filtering scope.
+  Scope `profile`/`email` hanya memengaruhi klaim di dalam `id_token`
+  (`name`, `picture`, `email`).
 </Callout>
 
 ---

@@ -234,21 +234,6 @@ body = r.json()  # {'status': True, 'data': {...}}
 
 ---
 
-## Profil User — `GET /userinfo`
-
-Pengambilan profil user tidak lagi lewat `GET /api/auth/me` (dihapus).
-Gunakan endpoint OAuth [`GET /userinfo`](/endpoints#get-userinfo) dengan
-access token dari alur OAuth (RS256):
-
-```http
-GET /userinfo
-Authorization: Bearer ACCESS_TOKEN
-```
-
-**Response** `200 OK` — objek user lengkap (lihat [Objek User](#objek-user)).
-
----
-
 ## POST /api/auth/change-password 🔒
 
 Ganti password user yang sedang login (wajib tahu password lama).
