@@ -19,7 +19,7 @@ Base URL: `https://sso.doscom.org` (development: `http://localhost:8080`)
 |-------|-------|-----------|
 | `avatar` | Ya | File gambar, maks **5 MB**, semua format gambar |
 
-Header: `Authorization: Bearer TOKEN_JWT` (dari `POST /api/auth/login` — lihat [Auth API](/auth-api)).
+Header: `Authorization: Bearer TOKEN_JWT` (JWT user dari SSO — lihat [Auth API](/auth-api)).
 
 **Response** `200 OK` — `data` berisi objek user lengkap dengan `avatar_url` baru:
 

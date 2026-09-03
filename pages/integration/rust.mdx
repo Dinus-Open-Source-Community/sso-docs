@@ -2,7 +2,7 @@
 title: Integrasi Rust
 ---
 
-import { Callout, Tabs, Tab } from 'nextra/components'
+import { Callout } from 'nextra/components'
 
 # Integrasi Rust
 
@@ -136,49 +136,13 @@ let new_token: CoreTokenResponse = client
 
 ## Auth API & Avatar
 
-Untuk API JSON langsung, pakai `reqwest` — lihat **[Auth API](/auth-api)** dan **[Avatar](/avatar)**:
-
-<Tabs items={['Login', 'Me', 'Avatar']}>
-
-<Tab>
-
-```rust
-use serde_json::json;
-
-let client = reqwest::blocking::Client::new();
-
-let res: serde_json::Value = client
-    .post("https://sso.doscom.org/api/auth/login")
-    .json(&json!({
-        "email": "budi@doscom.org",
-        "password": "rahasia123",
-    }))
-    .send()?
-    .json()?;
-
-let token = res["data"]["token"].as_str().unwrap();
-```
-
-</Tab>
-
-<Tab>
-
-```rust
-let res: serde_json::Value = client
-    .get("https://sso.doscom.org/api/auth/me")
-    .bearer_auth(token)
-    .send()?
-    .json()?;
-
-let user = &res["data"];
-```
-
-</Tab>
-
-<Tab>
+Untuk API JSON langsung, pakai `reqwest` — lihat **[Auth API](/auth-api)** dan
+**[Avatar](/avatar)**:
 
 ```rust
 use reqwest::blocking::multipart;
+
+let client = reqwest::blocking::Client::new();
 
 let form = multipart::Form::new()
     .file("avatar", "foto-profil.png")?;
@@ -192,10 +156,6 @@ let res: serde_json::Value = client
 
 let avatar_url = res["data"]["avatar_url"].as_str().unwrap();
 ```
-
-</Tab>
-
-</Tabs>
 
 ## Environment Variables
 

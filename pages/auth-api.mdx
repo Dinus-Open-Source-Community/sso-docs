@@ -6,11 +6,20 @@ import { Callout, Tabs, Tab } from 'nextra/components'
 
 # Auth API — `/api/auth/*`
 
-API JSON untuk mengelola akun DOSCOM secara langsung (tanpa alur redirect OAuth).
-Cocok untuk aplikasi yang butuh registrasi/login sendiri namun tetap memakai
-database user yang sama dengan SSO.
+API JSON untuk mengelola akun DOSCOM (tanpa alur redirect OAuth).
+Endpoint yang aktif saat ini: **transfer akun** (`/transfer`) dan
+**ganti password** (`/change-password`). Profil user kini diambil lewat
+`GET /userinfo` (OAuth) — lihat [Endpoint Referensi](/endpoints).
 
 Base URL: `https://sso.doscom.org` (development: `http://localhost:8080`)
+
+<Callout type="warning">
+  Endpoint `POST /api/auth/register`, `POST /api/auth/login`,
+  `GET /api/auth/verify-email`, `POST /api/auth/forgot-password`,
+  `POST /api/auth/reset-password`, dan `GET /api/auth/me` sedang
+  **dinonaktifkan/dihapus**. Pembuatan akun baru
+  saat ini hanya lewat [alur OAuth SSO](/how-it-works) atau endpoint `/transfer`.
+</Callout>
 
 ## Format Response
 
@@ -21,7 +30,7 @@ Semua endpoint mengembalikan envelope yang sama:
 ```json
 {
   "status": true,
-  "message": "login success",
+  "message": "account transferred",
   "data": { }
 }
 ```
@@ -31,22 +40,26 @@ Semua endpoint mengembalikan envelope yang sama:
 ```json
 {
   "status": false,
-  "message": "login failed",
+  "message": "unauthorized",
   "errors": "detail error"
 }
 ```
 
 ## Autentikasi
 
-Endpoint bertanda 🔒 membutuhkan header:
+Endpoint `/change-password` membutuhkan header:
 
 ```http
 Authorization: Bearer TOKEN_JWT
 ```
 
-`TOKEN_JWT` didapat dari response `POST /api/auth/login`. Token ini ditandatangani
-HS256 dengan secret milik SSO server — **validasinya dengan memanggil
-`GET /api/auth/me`**, bukan verifikasi lokal seperti `id_token` OAuth.
+`TOKEN_JWT` adalah JWT user (`kind: user`) yang ditandatangani HS256 dengan
+secret milik SSO server — verifikasi dilakukan server-side oleh endpoint yang
+memakainya, bukan verifikasi lokal seperti `id_token` OAuth.
+
+Endpoint `/transfer` berbeda: membutuhkan token portal developer
+(`kind: developer` — Bearer atau cookie `dev_portal`) dengan role
+**SuperAdmin**, karena ini operasi sensitif migrasi akun antar sistem.
 
 ## Objek User
 
@@ -56,44 +69,90 @@ HS256 dengan secret milik SSO server — **validasinya dengan memanggil
   "name": "Budi Santoso",
   "email": "budi@doscom.org",
   "avatar_url": "https://cdn.doscom.org/avatars/4.png",
+  "type": "d-form",
   "email_verified": true,
   "created_at": "2025-01-01T00:00:00Z"
 }
 ```
 
+Field `type` menandai asal akun (hasil `/transfer`): `d-form`, `google`,
+`github`, dll. Bentuk objek ini juga yang dikembalikan `GET /userinfo`.
+
 ---
 
-## POST /api/auth/register
+## POST /api/auth/transfer 🔒 SuperAdmin
 
-Daftar akun member baru. Sistem mengirim link verifikasi ke email.
+Pindahkan (registrasikan) akun user dari sistem lain ke SSO. Endpoint ini
+dipakai oleh aplikasi/sistem lain — **bukan end user** — dan wajib memakai
+token portal developer SuperAdmin.
 
-<Callout type="warning">
-  Rate limit: 5 percobaan / 15 menit per IP.
+Dua use case utama:
+
+1. **Migrasi data** — akun user sudah banyak tersimpan di database website
+   lain (mis. D-Form) dan ingin dipindahkan ke SSO. Kirim data tiap user
+   dengan `type: "d-form"` (atau nama sistem asalnya).
+2. **Login pihak ketiga** — user login via Google, GitHub, atau provider
+   lain di aplikasi kamu. Setelah login berhasil, kirim datanya ke SSO agar
+   tersimpan di sana dengan `type: "google"`, `type: "github"`, dst.
+
+<Callout type="info">
+  Nilai `type` bebas (2–50 karakter), tapi dipakai untuk menandai asal akun.
+  Gunakan nama yang konsisten: `d-form` untuk migrasi D-Form,
+  `google`/`github` untuk login pihak ketiga.
 </Callout>
 
 **Request** (`application/json`)
 
-| Field | Wajib | Validasi |
-|-------|-------|----------|
-| `name` | Ya | 3–100 karakter |
-| `email` | Ya | Format email, maks 150 karakter |
-| `password` | Ya | 8–72 karakter |
+| Field | Wajib | Validasi | Keterangan |
+|-------|-------|----------|------------|
+| `name` | Ya | 3–100 karakter | Nama user |
+| `email` | Ya | Format email, maks 150 karakter | Email user (akan di-lowercase) |
+| `avatar_url` | Tidak | Harus URL yang valid | Foto profil dari sistem asal |
+| `type` | Ya | 2–50 karakter | Asal akun: `d-form`, `google`, `github`, dll. |
+| `email_verified` | Tidak | `true`/`false` | `true` bila email sudah terverifikasi di sistem asal (mis. terverifikasi oleh Google/GitHub) |
 
-**Response** `201 Created` — `data` berisi objek user (`email_verified: false`).
+**Response** `201 Created` — `data` berisi objek user yang baru dibuat:
 
-**Error**: `409 Conflict` kalau email sudah terdaftar, `400` validasi gagal.
+```json
+{
+  "status": true,
+  "message": "account transferred",
+  "data": {
+    "id": 4,
+    "name": "Budi Santoso",
+    "email": "budi@doscom.org",
+    "avatar_url": "https://lh3.googleusercontent.com/...",
+    "email_verified": true,
+    "created_at": "2025-01-01T00:00:00Z"
+  }
+}
+```
+
+**Error**:
+- `400 Bad Request` — validasi gagal
+- `401 Unauthorized` — token bukan portal developer / bukan SuperAdmin
+- `409 Conflict` — email sudah terdaftar di SSO
+
+<Callout type="warning">
+  Akun hasil transfer dibuat **tanpa password**. Jika nanti user butuh
+  password (mis. untuk login form SSO), gunakan `POST /api/auth/change-password`
+  setelah user mendapatkan token, atau aktifkan kembali alur reset password.
+</Callout>
 
 <Tabs items={['curl', 'Go', 'Node.js', 'PHP', 'Python']}>
 
 <Tab>
 
 ```bash
-curl -X POST https://sso.doscom.org/api/auth/register \
+curl -X POST https://sso.doscom.org/api/auth/transfer \
+  -H "Authorization: Bearer PORTAL_TOKEN_SUPERADMIN" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Budi Santoso",
     "email": "budi@doscom.org",
-    "password": "rahasia123"
+    "avatar_url": "https://lh3.googleusercontent.com/a/foto.jpg",
+    "type": "google",
+    "email_verified": true
   }'
 ```
 
@@ -102,9 +161,12 @@ curl -X POST https://sso.doscom.org/api/auth/register \
 <Tab>
 
 ```go
-payload := `{"name":"Budi Santoso","email":"budi@doscom.org","password":"rahasia123"}`
-resp, err := http.Post("https://sso.doscom.org/api/auth/register",
-    "application/json", strings.NewReader(payload))
+payload := `{"name":"Budi Santoso","email":"budi@doscom.org","type":"d-form","email_verified":true}`
+req, _ := http.NewRequest("POST", "https://sso.doscom.org/api/auth/transfer",
+    strings.NewReader(payload))
+req.Header.Set("Authorization", "Bearer "+portalToken)
+req.Header.Set("Content-Type", "application/json")
+resp, err := http.DefaultClient.Do(req)
 ```
 
 </Tab>
@@ -112,13 +174,18 @@ resp, err := http.Post("https://sso.doscom.org/api/auth/register",
 <Tab>
 
 ```js
-const res = await fetch('https://sso.doscom.org/api/auth/register', {
+const res = await fetch('https://sso.doscom.org/api/auth/transfer', {
   method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
+  headers: {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${portalToken}`, // token developer SuperAdmin
+  },
   body: JSON.stringify({
     name: 'Budi Santoso',
     email: 'budi@doscom.org',
-    password: 'rahasia123',
+    avatar_url: 'https://lh3.googleusercontent.com/a/foto.jpg',
+    type: 'google', // atau 'd-form', 'github', dst.
+    email_verified: true,
   }),
 })
 const body = await res.json() // { status, message, data: { user } }
@@ -129,13 +196,14 @@ const body = await res.json() // { status, message, data: { user } }
 <Tab>
 
 ```php
-$client = new \GuzzleHttp\Client(['base_uri' => 'https://sso.doscom.org']);
-
-$res = $client->post('/api/auth/register', [
+$res = $client->post('/api/auth/transfer', [
+    'headers' => ['Authorization' => 'Bearer ' . $portalToken],
     'json' => [
-        'name'     => 'Budi Santoso',
-        'email'    => 'budi@doscom.org',
-        'password' => 'rahasia123',
+        'name'           => 'Budi Santoso',
+        'email'          => 'budi@doscom.org',
+        'avatar_url'     => 'https://lh3.googleusercontent.com/a/foto.jpg',
+        'type'           => 'google',
+        'email_verified' => true,
     ],
 ]);
 $body = json_decode($res->getBody(), true); // ['status' => true, 'data' => [...]]
@@ -146,13 +214,17 @@ $body = json_decode($res->getBody(), true); // ['status' => true, 'data' => [...
 <Tab>
 
 ```python
-import requests
-
-r = requests.post('https://sso.doscom.org/api/auth/register', json={
-    'name': 'Budi Santoso',
-    'email': 'budi@doscom.org',
-    'password': 'rahasia123',
-})
+r = requests.post(
+    'https://sso.doscom.org/api/auth/transfer',
+    headers={'Authorization': f'Bearer {portal_token}'},
+    json={
+        'name': 'Budi Santoso',
+        'email': 'budi@doscom.org',
+        'avatar_url': 'https://lh3.googleusercontent.com/a/foto.jpg',
+        'type': 'd-form',
+        'email_verified': True,
+    },
+)
 body = r.json()  # {'status': True, 'data': {...}}
 ```
 
@@ -162,220 +234,18 @@ body = r.json()  # {'status': True, 'data': {...}}
 
 ---
 
-## GET /api/auth/verify-email
+## Profil User — `GET /userinfo`
 
-Verifikasi akun via link dari email (endpoint yang diklik user di email).
-
-**Request**: `GET /api/auth/verify-email?token=TOKEN_DARI_EMAIL`
-
-**Response** `200 OK` — `{ "status": true, "message": "email verified" }`
-
-**Error**: `400` kalau token tidak valid / expired.
-
----
-
-## POST /api/auth/login
-
-Login dengan email & password, mendapatkan JWT untuk API.
-
-**Request** (`application/json`)
-
-| Field | Wajib | Keterangan |
-|-------|-------|-----------|
-| `email` | Ya | |
-| `password` | Ya | |
-
-**Response** `200 OK`
-
-```json
-{
-  "status": true,
-  "message": "login success",
-  "data": {
-    "token": "eyJhbGciOiJIUzI1NiIs...",
-    "type": "Bearer",
-    "user": {
-      "id": 4,
-      "name": "Budi Santoso",
-      "email": "budi@doscom.org",
-      "avatar_url": "...",
-      "email_verified": true,
-      "created_at": "2025-01-01T00:00:00Z"
-    }
-  }
-}
-```
-
-**Error**:
-- `403 Forbidden` — email belum diverifikasi (cek email untuk link verifikasi)
-- `401 Unauthorized` — email/password salah
-
-<Tabs items={['curl', 'Go', 'Node.js', 'PHP', 'Python']}>
-
-<Tab>
-
-```bash
-curl -X POST https://sso.doscom.org/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email": "budi@doscom.org", "password": "rahasia123"}'
-```
-
-</Tab>
-
-<Tab>
-
-```go
-import (
-    "bytes"
-    "encoding/json"
-    "net/http"
-)
-
-type loginResp struct {
-    Status  bool   `json:"status"`
-    Message string `json:"message"`
-    Data    struct {
-        Token string `json:"token"`
-        Type  string `json:"type"`
-        User  struct {
-            ID        uint   `json:"id"`
-            Name      string `json:"name"`
-            Email     string `json:"email"`
-            AvatarURL string `json:"avatar_url"`
-        } `json:"user"`
-    } `json:"data"`
-}
-
-payload, _ := json.Marshal(map[string]string{
-    "email": "budi@doscom.org", "password": "rahasia123",
-})
-resp, err := http.Post("https://sso.doscom.org/api/auth/login",
-    "application/json", bytes.NewReader(payload))
-if err != nil {
-    // handle error
-}
-defer resp.Body.Close()
-
-var out loginResp
-json.NewDecoder(resp.Body).Decode(&out)
-// simpan out.Data.Token, kirim sebagai "Authorization: Bearer <token>"
-```
-
-</Tab>
-
-<Tab>
-
-```js
-const res = await fetch('https://sso.doscom.org/api/auth/login', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ email: 'budi@doscom.org', password: 'rahasia123' }),
-})
-const { data } = await res.json()
-// data.token → kirim sebagai Authorization: Bearer <token>
-```
-
-</Tab>
-
-<Tab>
-
-```php
-$res = $client->post('/api/auth/login', [
-    'json' => ['email' => 'budi@doscom.org', 'password' => 'rahasia123'],
-]);
-$body = json_decode($res->getBody(), true);
-$token = $body['data']['token'] ?? null;
-```
-
-</Tab>
-
-<Tab>
-
-```python
-import requests
-
-r = requests.post('https://sso.doscom.org/api/auth/login', json={
-    'email': 'budi@doscom.org',
-    'password': 'rahasia123',
-})
-token = r.json()['data']['token']
-```
-
-</Tab>
-
-</Tabs>
-
----
-
-## GET /api/auth/me 🔒
-
-Profil user dari token JWT yang aktif.
-
-**Request**
+Pengambilan profil user tidak lagi lewat `GET /api/auth/me` (dihapus).
+Gunakan endpoint OAuth [`GET /userinfo`](/endpoints#get-userinfo) dengan
+access token dari alur OAuth (RS256):
 
 ```http
-GET /api/auth/me
-Authorization: Bearer TOKEN_JWT
+GET /userinfo
+Authorization: Bearer ACCESS_TOKEN
 ```
 
-**Response** `200 OK` — `data` berisi objek user.
-
-**Error**: `401` token tidak valid/expired, `404` user tidak ada.
-
-<Tabs items={['curl', 'Go', 'Node.js', 'PHP', 'Python']}>
-
-<Tab>
-
-```bash
-curl https://sso.doscom.org/api/auth/me \
-  -H "Authorization: Bearer TOKEN_JWT"
-```
-
-</Tab>
-
-<Tab>
-
-```go
-req, _ := http.NewRequest("GET", "https://sso.doscom.org/api/auth/me", nil)
-req.Header.Set("Authorization", "Bearer "+token)
-resp, err := http.DefaultClient.Do(req)
-```
-
-</Tab>
-
-<Tab>
-
-```js
-const res = await fetch('https://sso.doscom.org/api/auth/me', {
-  headers: { Authorization: `Bearer ${token}` },
-})
-const { data: user } = await res.json()
-```
-
-</Tab>
-
-<Tab>
-
-```php
-$res = $client->get('/api/auth/me', [
-    'headers' => ['Authorization' => 'Bearer ' . $token],
-]);
-$user = json_decode($res->getBody(), true)['data'];
-```
-
-</Tab>
-
-<Tab>
-
-```python
-r = requests.get('https://sso.doscom.org/api/auth/me',
-                 headers={'Authorization': f'Bearer {token}'})
-user = r.json()['data']
-```
-
-</Tab>
-
-</Tabs>
+**Response** `200 OK` — objek user lengkap (lihat [Objek User](#objek-user)).
 
 ---
 
@@ -400,50 +270,3 @@ curl -X POST https://sso.doscom.org/api/auth/change-password \
   -H "Content-Type: application/json" \
   -d '{"current_password": "rahasia123", "new_password": "baru45678"}'
 ```
-
----
-
-## POST /api/auth/forgot-password
-
-Kirim link reset password ke email user.
-
-<Callout type="warning">
-  Rate limit: 5 percobaan / 15 menit per IP.
-</Callout>
-
-**Request** (`application/json`)
-
-| Field | Wajib | Keterangan |
-|-------|-------|-----------|
-| `email` | Ya | Email terdaftar |
-
-**Response** `200 OK` — `{ "status": true, "message": "reset link sent to your email" }`
-
-**Error**: `404` email tidak ditemukan.
-
----
-
-## POST /api/auth/reset-password
-
-Set password baru memakai token dari link email.
-
-<Callout type="warning">
-  Rate limit: 10 percobaan / menit per IP.
-</Callout>
-
-**Request** (`application/json`)
-
-| Field | Wajib | Validasi |
-|-------|-------|----------|
-| `token` | Ya | Token dari link email |
-| `password` | Ya | 8–72 karakter |
-
-**Response** `200 OK` — `{ "status": true, "message": "password reset success" }`
-
-**Error**: `400` token tidak valid / expired.
-
-<Callout type="info">
-  Bedakan dengan alur **lupa password di halaman login SSO** (`POST /forgot-password`
-  & `POST /reset-password` tanpa prefix `/api`) — itu form HTML browser, lihat
-  [Endpoint Referensi](/endpoints).
-</Callout>

@@ -2,7 +2,7 @@
 title: Integrasi Node.js
 ---
 
-import { Callout, Tabs, Tab } from 'nextra/components'
+import { Callout } from 'nextra/components'
 
 # Integrasi Node.js
 
@@ -143,38 +143,8 @@ app.post('/logout', async (req, res) => {
 
 ## Auth API & Avatar
 
-Untuk registrasi/login langsung dan upload avatar (tanpa alur redirect OAuth),
-lihat **[Auth API](/auth-api)** dan **[Avatar](/avatar)**:
-
-<Tabs items={['Login', 'Me', 'Avatar']}>
-
-<Tab>
-
-```js
-// Login → JWT untuk /api/*
-const res = await fetch('https://sso.doscom.org/api/auth/login', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ email: 'budi@doscom.org', password: 'rahasia123' }),
-})
-const { data } = await res.json() // data.token
-```
-
-</Tab>
-
-<Tab>
-
-```js
-// Profil user dari token JWT
-const res = await fetch('https://sso.doscom.org/api/auth/me', {
-  headers: { Authorization: `Bearer ${token}` },
-})
-const { data: user } = await res.json()
-```
-
-</Tab>
-
-<Tab>
+Untuk upload avatar langsung (tanpa alur redirect OAuth), lihat
+**[Auth API](/auth-api)** dan **[Avatar](/avatar)**:
 
 ```js
 // Upload avatar (Node 18+: FormData + Blob)
@@ -188,10 +158,6 @@ const res = await fetch('https://sso.doscom.org/api/avatar', {
 })
 const { data } = await res.json() // data.avatar_url
 ```
-
-</Tab>
-
-</Tabs>
 
 ## Environment Variables
 

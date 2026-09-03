@@ -2,7 +2,7 @@
 title: Integrasi Java
 ---
 
-import { Callout, Tabs, Tab } from 'nextra/components'
+import { Callout } from 'nextra/components'
 
 # Integrasi Java
 
@@ -122,41 +122,6 @@ public JsonNode userinfo(String accessToken) throws Exception {
 
 Lihat **[Auth API](/auth-api)** dan **[Avatar](/avatar)**:
 
-<Tabs items={['Login', 'Me', 'Avatar']}>
-
-<Tab>
-
-```java
-// POST /api/auth/login → JWT untuk /api/*
-String json = """
-    {"email": "budi@doscom.org", "password": "rahasia123"}
-    """;
-HttpRequest req = HttpRequest.newBuilder(URI.create(SsoConfig.BASE_URL + "/api/auth/login"))
-    .header("Content-Type", "application/json")
-    .POST(HttpRequest.BodyPublishers.ofString(json))
-    .build();
-JsonNode body = new ObjectMapper()
-    .readTree(SsoConfig.HTTP.send(req, HttpResponse.BodyHandlers.ofString()).body());
-String token = body.path("data").path("token").asText();
-```
-
-</Tab>
-
-<Tab>
-
-```java
-HttpRequest req = HttpRequest.newBuilder(URI.create(SsoConfig.BASE_URL + "/api/auth/me"))
-    .header("Authorization", "Bearer " + token)
-    .GET().build();
-JsonNode user = new ObjectMapper()
-    .readTree(SsoConfig.HTTP.send(req, HttpResponse.BodyHandlers.ofString()).body())
-    .path("data");
-```
-
-</Tab>
-
-<Tab>
-
 ```java
 // Multipart upload (java.net.http tidak punya builder multipart — buat manual
 // atau pakai Spring's RestTemplate / OkHttp yang punya multipart bawaan)
@@ -172,10 +137,6 @@ var entity = new HttpEntity<>(body, headers);
 var res = rest.postForEntity(SsoConfig.BASE_URL + "/api/avatar", entity, Map.class);
 // res.getBody().get("data").get("avatar_url")
 ```
-
-</Tab>
-
-</Tabs>
 
 ## Environment Variables
 

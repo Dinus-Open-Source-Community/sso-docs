@@ -172,13 +172,6 @@ func logoutHandler(w http.ResponseWriter, r *http.Request) {
 
 ## API Auth & Avatar
 
-Butuh registrasi/login/upload avatar langsung dari Go (bukan alur OAuth)? Lihat
-**[Auth API](/auth-api)** dan **[Avatar](/avatar)**:
-
-```go
-// Login → JWT untuk /api/*
-payload := []byte(`{"email":"budi@doscom.org","password":"rahasia123"}`)
-resp, _ := http.Post("https://sso.doscom.org/api/auth/login",
-    "application/json", bytes.NewReader(payload))
-// → data.token → kirim sebagai Authorization: Bearer <token> ke /api/auth/me, /api/avatar
-```
+Butuh upload avatar langsung dari Go (bukan alur OAuth)? Lihat
+**[Auth API](/auth-api)** dan **[Avatar](/avatar)**. Profil user diambil lewat
+`client.Userinfo(ctx, accessToken)` — lihat tabel referensi di atas.

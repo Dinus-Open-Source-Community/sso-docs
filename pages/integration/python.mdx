@@ -2,7 +2,7 @@
 title: Integrasi Python
 ---
 
-import { Callout, Tabs, Tab } from 'nextra/components'
+import { Callout } from 'nextra/components'
 
 # Integrasi Python (Django / Flask / FastAPI)
 
@@ -158,36 +158,8 @@ claims.validate()
 
 ## Auth API & Avatar
 
-Untuk registrasi/login langsung dan upload avatar (tanpa alur redirect OAuth),
-lihat **[Auth API](/auth-api)** dan **[Avatar](/avatar)**:
-
-<Tabs items={['Login', 'Me', 'Avatar']}>
-
-<Tab>
-
-```python
-import requests
-
-r = requests.post('https://sso.doscom.org/api/auth/login', json={
-    'email': 'budi@doscom.org',
-    'password': 'rahasia123',
-})
-token = r.json()['data']['token']
-```
-
-</Tab>
-
-<Tab>
-
-```python
-r = requests.get('https://sso.doscom.org/api/auth/me',
-                 headers={'Authorization': f'Bearer {token}'})
-user = r.json()['data']
-```
-
-</Tab>
-
-<Tab>
+Untuk upload avatar langsung (tanpa alur redirect OAuth), lihat
+**[Auth API](/auth-api)** dan **[Avatar](/avatar)**:
 
 ```python
 with open('foto-profil.png', 'rb') as f:
@@ -198,10 +170,6 @@ with open('foto-profil.png', 'rb') as f:
     )
 avatar_url = r.json()['data']['avatar_url']
 ```
-
-</Tab>
-
-</Tabs>
 
 ## Environment Variables
 

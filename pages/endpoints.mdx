@@ -13,7 +13,7 @@ Dokumentasi ini membagi endpoint menjadi tiga kelompok:
 | Kelompok | Path | Kegunaan |
 |----------|------|----------|
 | **OAuth / OIDC** | `/authorize`, `/token`, `/userinfo`, ... | Alur "Login With Namamu" antar aplikasi |
-| **Auth API** | `/api/auth/*` | Registrasi, login, profil — API JSON langsung (lihat [Auth API](/auth-api)) |
+| **Auth API** | `/api/auth/*` | Transfer akun, ganti password — API JSON langsung (lihat [Auth API](/auth-api)) |
 | **Avatar** | `/api/avatar` | Upload foto profil user (lihat [Avatar](/avatar)) |
 
 Discovery document lengkap tersedia di:
@@ -150,9 +150,14 @@ Authorization: Bearer ACCESS_TOKEN
   "name": "Budi Santoso",
   "email": "budi@doscom.org",
   "avatar_url": "https://cdn.doscom.org/avatars/4.png",
+  "type": "d-form",
+  "email_verified": true,
   "created_at": "2025-01-01T00:00:00Z"
 }
 ```
+
+Field `type` menandai asal akun (hasil `POST /api/auth/transfer`):
+`d-form`, `google`, `github`, dll.
 
 <Callout type="info">
   Field mengikuti scope yang diminta:
@@ -251,7 +256,7 @@ Metadata OIDC lengkap: semua URL endpoint, scope, algoritma, dll.
 
 API JSON untuk mengelola akun **tanpa** alur redirect OAuth:
 
-- **Auth API** (`/api/auth/*`): registrasi, login, verifikasi email, lupa/reset password, profil — lihat **[Auth API](/auth-api)**
+- **Auth API** (`/api/auth/*`): transfer akun, ganti password — lihat **[Auth API](/auth-api)**. Endpoint `register`, `login`, `verify-email`, `forgot-password`, `reset-password`, dan `me` sedang dinonaktifkan/dihapus; profil user lewat `GET /userinfo` di atas.
 - **Avatar** (`POST /api/avatar`): upload foto profil — lihat **[Avatar](/avatar)**
 
 ---
@@ -266,6 +271,3 @@ API JSON untuk mengelola akun **tanpa** alur redirect OAuth:
 | `POST /forgot-password` (form OAuth) | 5 percobaan / 15 menit per email |
 | `POST /reset-password` | 10 percobaan / 15 menit per email |
 | `POST /token` | 20 request / menit per IP |
-| `POST /api/auth/register` | 5 percobaan / 15 menit per IP |
-| `POST /api/auth/forgot-password` | 5 percobaan / 15 menit per IP |
-| `POST /api/auth/reset-password` | 10 percobaan / menit per IP |

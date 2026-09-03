@@ -2,7 +2,7 @@
 title: Integrasi PHP
 ---
 
-import { Callout, Tabs, Tab } from 'nextra/components'
+import { Callout } from 'nextra/components'
 
 # Integrasi PHP (Laravel / Vanilla)
 
@@ -137,38 +137,12 @@ $decoded = JWT::decode($idToken, $keys);
 
 ## Auth API & Avatar
 
-Untuk registrasi/login langsung dan upload avatar (tanpa alur redirect OAuth),
-lihat **[Auth API](/auth-api)** dan **[Avatar](/avatar)**:
-
-<Tabs items={['Login', 'Me', 'Avatar']}>
-
-<Tab>
+Untuk upload avatar langsung (tanpa alur redirect OAuth), lihat
+**[Auth API](/auth-api)** dan **[Avatar](/avatar)**:
 
 ```php
 $client = new \GuzzleHttp\Client(['base_uri' => 'https://sso.doscom.org']);
 
-$res = $client->post('/api/auth/login', [
-    'json' => ['email' => 'budi@doscom.org', 'password' => 'rahasia123'],
-]);
-$token = json_decode($res->getBody(), true)['data']['token'];
-```
-
-</Tab>
-
-<Tab>
-
-```php
-$res = $client->get('/api/auth/me', [
-    'headers' => ['Authorization' => 'Bearer ' . $token],
-]);
-$user = json_decode($res->getBody(), true)['data'];
-```
-
-</Tab>
-
-<Tab>
-
-```php
 $res = $client->post('/api/avatar', [
     'headers' => ['Authorization' => 'Bearer ' . $token],
     'multipart' => [[
@@ -179,10 +153,6 @@ $res = $client->post('/api/avatar', [
 ]);
 $avatarUrl = json_decode($res->getBody(), true)['data']['avatar_url'];
 ```
-
-</Tab>
-
-</Tabs>
 
 ## Environment Variables (.env Laravel)
 

@@ -2,7 +2,7 @@
 title: Integrasi C# (.NET)
 ---
 
-import { Callout, Tabs, Tab } from 'nextra/components'
+import { Callout } from 'nextra/components'
 
 # Integrasi C# (.NET)
 
@@ -148,38 +148,6 @@ var resp = await SsoOptions.Http.PostAsync(
 
 Lihat **[Auth API](/auth-api)** dan **[Avatar](/avatar)**:
 
-<Tabs items={['Login', 'Me', 'Avatar']}>
-
-<Tab>
-
-```csharp
-// POST /api/auth/login → JWT untuk /api/*
-var resp = await SsoOptions.Http.PostAsJsonAsync(
-    $"{SsoOptions.BaseUrl}/api/auth/login",
-    new { email = "budi@doscom.org", password = "rahasia123" });
-
-var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
-var token = body.GetProperty("data").GetProperty("token").GetString();
-```
-
-</Tab>
-
-<Tab>
-
-```csharp
-using var req = new HttpRequestMessage(HttpMethod.Get,
-    $"{SsoOptions.BaseUrl}/api/auth/me");
-req.Headers.Authorization = new("Bearer", token);
-
-var resp = await SsoOptions.Http.SendAsync(req);
-var user = (await resp.Content.ReadFromJsonAsync<JsonElement>())
-    .GetProperty("data");
-```
-
-</Tab>
-
-<Tab>
-
 ```csharp
 using var content = new MultipartFormDataContent();
 
@@ -195,10 +163,6 @@ var resp = await SsoOptions.Http.SendAsync(req);
 var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
 var avatarUrl = body.GetProperty("data").GetProperty("avatar_url").GetString();
 ```
-
-</Tab>
-
-</Tabs>
 
 ## Environment Variables
 

@@ -2,7 +2,7 @@
 title: Integrasi Ruby
 ---
 
-import { Callout, Tabs, Tab } from 'nextra/components'
+import { Callout } from 'nextra/components'
 
 # Integrasi Ruby (Rails / Sinatra)
 
@@ -135,32 +135,6 @@ end
 
 Lihat **[Auth API](/auth-api)** dan **[Avatar](/avatar)**:
 
-<Tabs items={['Login', 'Me', 'Avatar']}>
-
-<Tab>
-
-```ruby
-res = Faraday.post('https://sso.doscom.org/api/auth/login',
-  { email: 'budi@doscom.org', password: 'rahasia123' }.to_json,
-  { 'Content-Type' => 'application/json' }
-)
-token = JSON.parse(res.body)['data']['token']
-```
-
-</Tab>
-
-<Tab>
-
-```ruby
-res = Faraday.get('https://sso.doscom.org/api/auth/me', nil,
-  { 'Authorization' => "Bearer #{token}" })
-user = JSON.parse(res.body)['data']
-```
-
-</Tab>
-
-<Tab>
-
 ```ruby
 # Upload avatar (multipart)
 payload = {
@@ -173,10 +147,6 @@ res = Faraday.post('https://sso.doscom.org/api/avatar', payload) do |req|
 end
 avatar_url = JSON.parse(res.body)['data']['avatar_url']
 ```
-
-</Tab>
-
-</Tabs>
 
 ## Environment Variables
 
