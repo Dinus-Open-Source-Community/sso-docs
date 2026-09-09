@@ -1,25 +1,60 @@
 ---
-title: Auth API
+title: Auth API — Bind Akun
 ---
 
 import { Callout, Tabs, Tab } from 'nextra/components'
 
-# Auth API — `/api/auth/*`
+# Auth API — Bind Akun (`/api/auth/*`)
 
-API JSON untuk mengelola akun DOSCOM (tanpa alur redirect OAuth).
-Endpoint yang aktif saat ini: **transfer akun** (`/transfer`) dan
-**ganti password** (`/change-password`). Profil user kini diambil lewat
-`GET /userinfo` (OAuth) — lihat [Endpoint Referensi](/endpoints).
+API JSON untuk menautkan (**bind**) akun lokal aplikasimu ke SSO Doscom —
+tanpa memigrasikan password. Pengguna tetap login di SSO (OAuth + OTP),
+aplikasimu menyimpan kaitan `sso_id` secara lokal.
 
 Base URL: `https://sso.doscom.org` (development: `http://localhost:8080`)
 
 <Callout type="warning">
-  Endpoint `POST /api/auth/register`, `POST /api/auth/login`,
+  Endpoint lama `POST /api/auth/register`, `POST /api/auth/login`,
   `GET /api/auth/verify-email`, `POST /api/auth/forgot-password`,
-  `POST /api/auth/reset-password`, dan `GET /api/auth/me` sedang
-  **dinonaktifkan/dihapus**. Pembuatan akun baru
-  saat ini hanya lewat [alur OAuth SSO](/how-it-works) atau endpoint `/transfer`.
+  `POST /api/auth/reset-password`, `POST /api/auth/transfer`, dan
+  `POST /api/auth/change-password` sedang **dinonaktifkan/dihapus**.
+  Pembuatan akun baru hanya lewat [alur OAuth](/how-it-works) (`/authorize` →
+  `/register` + OTP), [Portal Akun](/account-portal) (`/`), atau alur bind
+  di bawah. Profil user diambil lewat `GET /userinfo` — lihat
+  [Endpoint Referensi](/endpoints).
 </Callout>
+
+## Konsep bind
+
+| Istilah | Arti |
+|---|---|
+| `bind` | Array di profil user: `[{ "client_id": "...", "name": "Nama Aplikasimu" }]` — satu akun bisa terikat ke banyak aplikasi. `null`/kosong = belum ter-bind. |
+| `RecordSSOApp` | Setiap login/register OAuth yang sukses **otomatis** menambahkan aplikasimu ke `bind`. Tidak perlu dipanggil manual. |
+| `bind_token` | Bukti bind (JWT RS256, ±5 menit) yang di-redirect ke `return_url` aplikasimu setelah bind sukses. Verifikasi via JWKS. |
+| `binding/status` | Endpoint cek status bind — hanya di-hit untuk akun yang ter-bind lokal. |
+| `bind_account` (OTP) | Kode OTP 6 digit (`purpose = bind_account`, TTL ±5 menit) yang dikirim ke email user sebelum bind dieksekusi — berlaku untuk email baru maupun existing. Niat bind menunggu di tabel `bind_requests` (±15 menit, token pending opaque, password langsung bcrypt + PII terenkripsi). |
+
+Alur lengkap — submit form/konfirmasi **tidak langsung** membuat bind,
+melainkan menyimpan niat bind + mengirim OTP, lalu OTP diverifikasi di halaman
+terpisah (contoh implementasi awal tanpa OTP: repo `DummyWebSSO` — `server.js`
++ `sso.js`; sesuaikan dengan langkah OTP di bawah karena `DummyWebSSO` belum
+mendukung OTP):
+
+```
+Aplikasimu                SSO
+    |  POST /api/auth/bind {name,email,client_id,return_url}  |
+    | ------------------------------------------------------> |
+    |  { data: { url: ".../api/auth/bind/form?token=..." } }  |
+    | <------------------------------------------------------ |
+    |  tampilkan url ke user (link "Bind Akun Doscom")         |
+    |  user isi form / konfirmasi di SSO                       |
+    |  SSO simpan niat bind + kirim OTP ke email               |
+    |  302 -> /api/auth/bind/otp?token=<PENDING>               |
+    |  user input kode OTP (bisa kirim ulang)                  |
+    |  OTP benar -> SSO redirect                               |
+    |    {return_url}?bind_token=<JWT>                         |
+    | ------------------------------------------------------> |
+    |  verifikasi bind_token via JWKS, tautkan akun lokal      |
+```
 
 ## Format Response
 
@@ -30,8 +65,8 @@ Semua endpoint mengembalikan envelope yang sama:
 ```json
 {
   "status": true,
-  "message": "account transferred",
-  "data": { }
+  "message": "bind form ready",
+  "data": { "url": "https://sso.doscom.org/api/auth/bind/form?token=..." }
 }
 ```
 
@@ -40,26 +75,10 @@ Semua endpoint mengembalikan envelope yang sama:
 ```json
 {
   "status": false,
-  "message": "unauthorized",
+  "message": "unknown client_id",
   "errors": "detail error"
 }
 ```
-
-## Autentikasi
-
-Endpoint `/change-password` membutuhkan header:
-
-```http
-Authorization: Bearer TOKEN_JWT
-```
-
-`TOKEN_JWT` adalah JWT user (`kind: user`) yang ditandatangani HS256 dengan
-secret milik SSO server — verifikasi dilakukan server-side oleh endpoint yang
-memakainya, bukan verifikasi lokal seperti `id_token` OAuth.
-
-Endpoint `/transfer` berbeda: membutuhkan token portal developer
-(`kind: developer` — Bearer atau cookie `dev_portal`) dengan role
-**SuperAdmin**, karena ini operasi sensitif migrasi akun antar sistem.
 
 ## Objek User
 
@@ -69,104 +88,57 @@ Endpoint `/transfer` berbeda: membutuhkan token portal developer
   "name": "Budi Santoso",
   "email": "budi@doscom.org",
   "avatar_url": "https://cdn.doscom.org/avatars/4.png",
-  "type": "d-form",
+  "bind": [{ "client_id": "abc123", "name": "DummyWebSSO" }],
   "email_verified": true,
   "created_at": "2025-01-01T00:00:00Z"
 }
 ```
 
-Field `type` menandai asal akun (hasil `/transfer`): `d-form`, `google`,
-`github`, dll. Bentuk objek ini juga yang dikembalikan `GET /userinfo`.
+Bentuk objek ini juga yang dikembalikan `GET /userinfo`.
 
 ---
 
-## POST /api/auth/transfer 🔒 SuperAdmin
+## POST /api/auth/bind
 
-Pindahkan (registrasikan) akun user dari sistem lain ke SSO. Endpoint ini
-dipakai oleh aplikasi/sistem lain — **bukan end user** — dan wajib memakai
-token portal developer SuperAdmin.
-
-Dua use case utama:
-
-1. **Migrasi data** — akun user sudah banyak tersimpan di database website
-   lain (mis. D-Form) dan ingin dipindahkan ke SSO. Kirim data tiap user
-   dengan `type: "d-form"` (atau nama sistem asalnya).
-2. **Login pihak ketiga** — user login via Google, GitHub, atau provider
-   lain di aplikasi kamu. Setelah login berhasil, kirim datanya ke SSO agar
-   tersimpan di sana dengan `type: "google"`, `type: "github"`, dst.
-
-<Callout type="info">
-  Nilai `type` bebas (2–50 karakter), tapi dipakai untuk menandai asal akun.
-  Gunakan nama yang konsisten: `d-form` untuk migrasi D-Form,
-  `google`/`github` untuk login pihak ketiga.
-</Callout>
+Minta URL form bind SSO yang sudah terisi otomatis (`name` + `email`).
+`return_url` **wajib** — browser di-redirect ke sana setelah bind selesai
+dengan `?bind_token=<JWT>`.
 
 **Request** (`application/json`)
 
 | Field | Wajib | Validasi | Keterangan |
 |-------|-------|----------|------------|
-| `name` | Ya | 3–100 karakter | Nama user |
+| `name` | Ya | 3–100 karakter | Nama user (prefill form) |
 | `email` | Ya | Format email, maks 150 karakter | Email user (akan di-lowercase) |
-| `avatar_url` | Tidak | Harus URL yang valid | Foto profil dari sistem asal |
-| `type` | Ya | 2–50 karakter | Asal akun: `d-form`, `google`, `github`, dll. |
-| `email_verified` | Tidak | `true`/`false` | `true` bila email sudah terverifikasi di sistem asal (mis. terverifikasi oleh Google/GitHub) |
+| `client_id` | Ya | Harus terdaftar & aktif | Client ID aplikasimu dari Developer Console |
+| `return_url` | Ya | URL http(s) valid | Mis. `https://appkamu.com/profile` — harus URL aplikasimu sendiri |
 
-**Response** `201 Created` — `data` berisi objek user yang baru dibuat:
+**Response** `200 OK` — `data.url` adalah halaman form bind:
 
 ```json
 {
   "status": true,
-  "message": "account transferred",
-  "data": {
-    "id": 4,
-    "name": "Budi Santoso",
-    "email": "budi@doscom.org",
-    "avatar_url": "https://lh3.googleusercontent.com/...",
-    "email_verified": true,
-    "created_at": "2025-01-01T00:00:00Z"
-  }
+  "message": "bind form ready",
+  "data": { "url": "https://sso.doscom.org/api/auth/bind/form?token=eyJ..." }
 }
 ```
 
-**Error**:
-- `400 Bad Request` — validasi gagal
-- `401 Unauthorized` — token bukan portal developer / bukan SuperAdmin
-- `409 Conflict` — email sudah terdaftar di SSO
+**Error**: `400` validasi gagal / token bind tidak valid, `404` `client_id` tak dikenal.
 
-<Callout type="warning">
-  Akun hasil transfer dibuat **tanpa password**. Jika nanti user butuh
-  password (mis. untuk login form SSO), gunakan `POST /api/auth/change-password`
-  setelah user mendapatkan token, atau aktifkan kembali alur reset password.
-</Callout>
-
-<Tabs items={['curl', 'Go', 'Node.js', 'PHP', 'Python']}>
+<Tabs items={['curl', 'Node.js']}>
 
 <Tab>
 
 ```bash
-curl -X POST https://sso.doscom.org/api/auth/transfer \
-  -H "Authorization: Bearer PORTAL_TOKEN_SUPERADMIN" \
+curl -X POST https://sso.doscom.org/api/auth/bind \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Budi Santoso",
     "email": "budi@doscom.org",
-    "avatar_url": "https://lh3.googleusercontent.com/a/foto.jpg",
-    "type": "google",
-    "email_verified": true
+    "client_id": "CLIENT_ID_KAMU",
+    "return_url": "https://appkamu.com/profile"
   }'
-```
-
-</Tab>
-
-<Tab>
-
-```go
-payload := `{"name":"Budi Santoso","email":"budi@doscom.org","type":"d-form","email_verified":true}`
-req, _ := http.NewRequest("POST", "https://sso.doscom.org/api/auth/transfer",
-    strings.NewReader(payload))
-req.Header.Set("Authorization", "Bearer "+portalToken)
-req.Header.Set("Content-Type", "application/json")
-resp, err := http.DefaultClient.Do(req)
+# -> { "status": true, "data": { "url": "https://sso.doscom.org/api/auth/bind/form?token=..." } }
 ```
 
 </Tab>
@@ -174,58 +146,18 @@ resp, err := http.DefaultClient.Do(req)
 <Tab>
 
 ```js
-const res = await fetch('https://sso.doscom.org/api/auth/transfer', {
+// Pola DummyWebSSO (sso.js: requestBindFormUrl)
+const res = await fetch(`${SSO_BASE_URL}/api/auth/bind`, {
   method: 'POST',
-  headers: {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${portalToken}`, // token developer SuperAdmin
-  },
+  headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
-    name: 'Budi Santoso',
-    email: 'budi@doscom.org',
-    avatar_url: 'https://lh3.googleusercontent.com/a/foto.jpg',
-    type: 'google', // atau 'd-form', 'github', dst.
-    email_verified: true,
+    name, email,
+    client_id: process.env.SSO_CLIENT_ID,
+    return_url: `${process.env.APP_BASE_URL}/profile`,
   }),
 })
-const body = await res.json() // { status, message, data: { user } }
-```
-
-</Tab>
-
-<Tab>
-
-```php
-$res = $client->post('/api/auth/transfer', [
-    'headers' => ['Authorization' => 'Bearer ' . $portalToken],
-    'json' => [
-        'name'           => 'Budi Santoso',
-        'email'          => 'budi@doscom.org',
-        'avatar_url'     => 'https://lh3.googleusercontent.com/a/foto.jpg',
-        'type'           => 'google',
-        'email_verified' => true,
-    ],
-]);
-$body = json_decode($res->getBody(), true); // ['status' => true, 'data' => [...]]
-```
-
-</Tab>
-
-<Tab>
-
-```python
-r = requests.post(
-    'https://sso.doscom.org/api/auth/transfer',
-    headers={'Authorization': f'Bearer {portal_token}'},
-    json={
-        'name': 'Budi Santoso',
-        'email': 'budi@doscom.org',
-        'avatar_url': 'https://lh3.googleusercontent.com/a/foto.jpg',
-        'type': 'd-form',
-        'email_verified': True,
-    },
-)
-body = r.json()  # {'status': True, 'data': {...}}
+const body = await res.json()
+const bindFormUrl = body.data?.url // tampilkan sebagai link ke user
 ```
 
 </Tab>
@@ -234,24 +166,199 @@ body = r.json()  # {'status': True, 'data': {...}}
 
 ---
 
-## POST /api/auth/change-password 🔒
+## GET /api/auth/bind/form?token=...
 
-Ganti password user yang sedang login (wajib tahu password lama).
+Halaman HTML form bind (dibuka browser user, bukan server-to-server).
+Token berlaku ±30 menit (HS256, berisi `name`/`email`/`client_id`/`return_url`).
 
-**Request** (`application/json`)
+Perilaku:
 
-| Field | Wajib | Validasi |
-|-------|-------|----------|
-| `current_password` | Ya | |
-| `new_password` | Ya | 8–72 karakter |
+- Email **belum terdaftar** → form register (nama, email prefill + password baru).
+- Email **sudah terdaftar tapi belum ter-bind** ke aplikasi ini → halaman konfirmasi "hubungkan akun".
+- Email **sudah ter-bind** ke aplikasi ini → langsung response JSON `account already bound` (tanpa form).
 
-**Response** `200 OK` — `{ "status": true, "message": "password changed" }`
+## POST /api/auth/bind/form
 
-**Error**: `400` password lama salah, `401` token tidak valid.
+Submit form bind (browser). Body form (`application/x-www-form-urlencoded`)
+atau JSON:
 
-```bash
-curl -X POST https://sso.doscom.org/api/auth/change-password \
-  -H "Authorization: Bearer TOKEN_JWT" \
-  -H "Content-Type: application/json" \
-  -d '{"current_password": "rahasia123", "new_password": "baru45678"}'
+| Field | Wajib | Keterangan |
+|-------|-------|------------|
+| `token` | Ya | Token dari query `?token=` di atas |
+| `name` | Ya | 3–100 karakter |
+| `email` | Ya | Format email |
+| `password` | Ya | 8–72 karakter (hanya untuk akun baru) |
+
+Perilaku baru (wajib OTP):
+
+- Akun baru → **niat bind disimpan** (password langsung bcrypt, nama/email
+  terenkripsi AES, token pending opaque yang disimpan hanya hash-nya) + kode
+  OTP `bind_account` dikirim ke email → response `302` redirect ke
+  `/api/auth/bind/otp?token=<PENDING>` (bukan langsung `bind_token`).
+- Email sudah ada → dikembalikan ke halaman konfirmasi (tidak menimpa
+  password) — lanjutkan via `POST /api/auth/bind/confirm` di bawah (yang juga
+  masuk jalur OTP).
+- Baris `bind_requests` kedaluwarsa dibersihkan otomatis setiap ada niat baru;
+  bila pengiriman OTP gagal (selain cooldown), niat yang baru dibuat ikut
+  dihapus.
+
+## POST /api/auth/bind/confirm
+
+Konfirmasi hubungkan akun yang **sudah ada** (tambah entri bind tanpa mengubah
+password / status verifikasi). Body form atau JSON:
+
+| Field | Wajib | Keterangan |
+|-------|-------|------------|
+| `token` | Ya | Token dari query `?token=` |
+| `email` | Ya | Email akun yang sudah terdaftar |
+
+Perilaku baru (wajib OTP):
+
+- Bila sudah ter-bind → response `account already bound` (idempoten, tanpa OTP).
+- Bila belum ter-bind → **niat bind disimpan** (jalur konfirmasi: password
+  kosong) + kode OTP dikirim → response `302` redirect ke
+  `/api/auth/bind/otp?token=<PENDING>`.
+- Eksekusi bind (tambah entri `bind`) baru terjadi setelah OTP benar di bawah.
+
+---
+
+## GET /api/auth/bind/otp?token=...
+
+Halaman HTML input kode OTP bind (dibuka browser user, bukan
+server-to-server). `token` adalah token pending opaque dari redirect di atas
+(berlaku ±15 menit — lebih lama dari TTL kode OTP ±5 menit).
+
+- Token tidak dikenal / kedaluwarsa → JSON `400 bind failed
+  (invalid or expired bind request)`.
+- `client_id` pada niat bind sudah nonaktif/dihapus → `400 unknown client_id`.
+
+## POST /api/auth/bind/otp
+
+Verifikasi kode OTP lalu eksekusi bind. Body form
+(`application/x-www-form-urlencoded`) atau JSON:
+
+| Field | Wajib | Keterangan |
+|-------|-------|------------|
+| `token` | Ya | Token pending dari query `?token=` |
+| `code` | Kondisional | 6 digit kode dari email. Wajib kecuali saat kirim ulang (`resend=1`). |
+| `resend` | Tidak | Isi `1` untuk kirim ulang kode (tanpa `code`). Terkena cooldown bila terlalu cepat. |
+
+Perilaku:
+
+- Kosongkan `code` + `resend=1` → kirim ulang kode ke email yang sama, kembali
+  ke halaman OTP dengan banner info ("Kode baru sudah dikirim…"). Cooldown →
+  banner tunggu sebentar, niat bind tetap berlaku (kode sebelumnya masih bisa
+  dipakai).
+- `code` salah / kedaluwarsa / terlalu banyak percobaan → kembali ke halaman
+  OTP dengan pesan error (tanpa menghapus niat bind).
+- `code` benar → bind dieksekusi lalu niat bind dihapus:
+  - Jalur form (ada password): email masih baru → buat akun + langsung
+    ter-bind (`bind = [{client_id, name}]`); email ternyata sudah terdaftar
+    (balapan) → tambah bind ke akun existing.
+  - Jalur konfirmasi (tanpa password): akun wajib sudah ada → tambah entri
+    `bind` (password & status verifikasi tidak diubah).
+  - Response `302` redirect ke `{return_url}?bind_token=<JWT>` (bila
+    `return_url` kosong — tidak normal karena `return_url` wajib saat
+    `/api/auth/bind` — tidak ada redirect; bind tetap sukses).
+- Subjek email OTP: "Kode verifikasi bind doscom". Di dev tanpa SMTP, kode
+  di-log ke stdout server SSO.
+
+---
+
+## Verifikasi `bind_token` (wajib)
+
+Setelah OTP benar dan bind dieksekusi, SSO redirect browser ke:
+
 ```
+{return_url}?bind_token=<JWT>
+```
+
+`bind_token` adalah JWT **RS256** (±5 menit). Verifikasi di backend aplikasimu
+(jangan percaya mentah-mentah):
+
+1. Split 3 bagian, cek `alg == RS256`.
+2. Ambil JWKS publik: `GET {SSO}/.well-known/jwks.json` (cache ±5 menit).
+3. Verifikasi signature RSA-SHA256 dengan key yang `kid`-nya cocok (fallback key RSA pertama).
+4. Cek klaim: `iss == SSO_BASE_URL`, `aud == client_id` **milikmu sendiri**,
+   `event == "account.bind"`, `exp` belum lewat, `sub` ada.
+5. Sukses → payload `{ sub, email, name }` → tautkan akun lokal
+   (`sso_id = sub`, simpan `bind` untuk aplikasi ini) → redirect bersih ke
+   `/profile` + notif "Akun Doscom berhasil di-bind."
+
+```js
+// Pola DummyWebSSO (sso.js: verifyBindToken) — disederhanakan
+const [hB64, pB64, sB64] = bindToken.split('.')
+const header = JSON.parse(b64urlDecode(hB64))
+const payload = JSON.parse(b64urlDecode(pB64))
+if (header.alg !== 'RS256') throw new Error('alg tidak didukung')
+const jwks = await (await fetch(`${SSO}/.well-known/jwks.json`)).json()
+const jwk = jwks.keys.find((k) => k.kid === header.kid) ?? jwks.keys[0]
+const pubKey = crypto.createPublicKey({ key: jwk, format: 'jwk' })
+const valid = crypto.verify('RSA-SHA256', Buffer.from(`${hB64}.${pB64}`), pubKey, b64urlDecode(sB64))
+if (!valid) throw new Error('signature tidak valid')
+if (payload.iss !== SSO_BASE_URL) throw new Error('issuer tidak dikenal')
+if (payload.aud !== MY_CLIENT_ID) throw new Error('bukan untuk aplikasi ini')
+if (payload.event !== 'account.bind') throw new Error('event tidak valid')
+if (payload.exp * 1000 <= Date.now()) throw new Error('bind_token kedaluwarsa')
+```
+
+<Callout type="warning">
+  Selalu bandingkan `aud` dengan `client_id` milikmu — token untuk aplikasi
+  lain harus ditolak.
+</Callout>
+
+---
+
+## GET /api/auth/binding/status
+
+Cek status bind satu email ke satu `client_id` + data bind-nya. Dipakai untuk
+**sinkronisasi**: mis. user melepas aplikasi dari Portal Akun SSO.
+
+**Request**
+
+```
+GET /api/auth/binding/status?email=budi@doscom.org&client_id=CLIENT_ID_KAMU
+```
+
+**Response** `200 OK`:
+
+```json
+{
+  "status": true,
+  "message": "bind status",
+  "data": {
+    "email": "budi@doscom.org",
+    "client_id": "CLIENT_ID_KAMU",
+    "bound": true,
+    "bind": { "client_id": "CLIENT_ID_KAMU", "name": "DummyWebSSO" }
+  }
+}
+```
+
+`bound: false` + `bind: null` = user ada tapi belum ter-bind ke aplikasi ini.
+`404` = email tak dikenal / `client_id` tak dikenal.
+
+<Callout type="warning">
+  Panggil endpoint ini **HANYA bila akun tersebut memakai login SSO**
+  (ter-bind lokal — simpan flag `sso_id`/`sso_bound` di DB aplikasimu).
+  Akun lokal/non-SSO **jangan** hit endpoint ini — hemat request dan hindari
+  rate limit (60/menit/IP). Pola DummyWebSSO (`syncBindStatus`):
+  `bound:false`/404 → hapus kaitan lokal; 429/gangguan jaringan → pakai cache
+  lokal tanpa mengubah DB.
+</Callout>
+
+```js
+// Pola DummyWebSSO (sso.js: fetchBindingStatus) — hanya untuk akun ter-bind lokal
+if (!user.bound) return user // akun lokal: jangan hit SSO sama sekali
+const q = new URLSearchParams({ email, client_id: MY_CLIENT_ID })
+const res = await fetch(`${SSO}/api/auth/binding/status?${q}`)
+const { data } = await res.json() // { bound, bind, email }
+```
+
+## Rate Limit
+
+| Endpoint | Limit |
+|----------|-------|
+| `POST /api/auth/bind`, `POST /api/auth/bind/form`, `POST /api/auth/bind/confirm`, `POST /api/auth/bind/otp` | 10 request / menit per IP |
+| `GET /api/auth/bind/form`, `GET /api/auth/bind/otp` | 30 request / menit per IP |
+| `GET /api/auth/binding/status` | 60 request / menit per IP |

@@ -5,8 +5,9 @@
   "index": "Beranda",
   "how-it-works": "Cara Kerja",
   "endpoints": "Endpoint Referensi",
-  "auth-api": "Auth API",
+  "auth-api": "Auth API (Bind)",
   "avatar": "Avatar",
+  "account-portal": "Portal Akun",
   "integration": "Panduan Integrasi",
   "developer-console": "Developer Console",
   "admin": "Admin — Kelola User"

@@ -115,7 +115,8 @@ public static async Task<JsonElement> UserinfoAsync(string accessToken)
     var resp = await SsoOptions.Http.SendAsync(req);
     resp.EnsureSuccessStatusCode();
     return await resp.Content.ReadFromJsonAsync<JsonElement>();
-    // id, name, email, avatar_url, type, email_verified, created_at
+    // id, name, email, avatar_url, bind, email_verified, created_at
+    // (bind = [{client_id, name}], otomatis terisi saat login sukses)
 }
 ```
 
@@ -144,25 +145,29 @@ var resp = await SsoOptions.Http.PostAsync(
     new FormUrlEncodedContent(form));
 ```
 
+## Bind Akun & Status Bind
+
+Pola acuan: `DummyWebSSO` (`sso.js`). Selain "Login with Doscom", tautkan akun
+lokal via [Auth API](/auth-api): `POST {SSO}/api/auth/bind` (`name`, `email`,
+`client_id`, `return_url`) → tampilkan `data.url` → setelah redirect
+`{return_url}?bind_token=<JWT>`, verifikasi RS256 via JWKS (`iss`, `aud` =
+client_id sendiri, `event = account.bind`, `exp` ±5 mnt). Sinkronisasi via
+`GET {SSO}/api/auth/binding/status` **hanya** untuk akun ter-bind lokal.
+
+Sejak update terbaru, submit form/konfirmasi **tidak langsung** mengeksekusi
+bind — SSO menyimpan niat bind + mengirim kode OTP 6 digit
+(`purpose = bind_account`) ke email user, lalu redirect ke
+`/api/auth/bind/otp?token=<PENDING>`. Bind dieksekusi dan `bind_token`
+di-redirect ke `return_url` hanya setelah OTP benar (bisa kirim ulang via
+`resend=1`). `DummyWebSSO` belum mendukung langkah OTP ini — lihat alur
+lengkap di [Auth API — Bind](/auth-api).
+
 ## Auth API & Avatar
 
-Lihat **[Auth API](/auth-api)** dan **[Avatar](/avatar)**:
-
-```csharp
-using var content = new MultipartFormDataContent();
-
-await using var stream = File.OpenRead("foto-profil.png");
-content.Add(new StreamContent(stream), "avatar", "foto-profil.png");
-
-using var req = new HttpRequestMessage(HttpMethod.Post,
-    $"{SsoOptions.BaseUrl}/api/avatar");
-req.Headers.Authorization = new("Bearer", token);
-req.Content = content;
-
-var resp = await SsoOptions.Http.SendAsync(req);
-var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
-var avatarUrl = body.GetProperty("data").GetProperty("avatar_url").GetString();
-```
+Lihat **[Auth API — Bind](/auth-api)**. Upload avatar via API
+(`POST /api/avatar`) sudah **dihapus** — user mengganti foto lewat
+[Portal Akun](/account-portal); aplikasimu cukup membaca `avatar_url` terbaru
+dari `/userinfo` (contoh `UserinfoAsync` di atas).
 
 ## Environment Variables
 

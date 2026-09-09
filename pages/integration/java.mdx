@@ -108,7 +108,8 @@ public JsonNode userinfo(String accessToken) throws Exception {
 
     HttpResponse<String> resp = SsoConfig.HTTP.send(req, HttpResponse.BodyHandlers.ofString());
     return new ObjectMapper().readTree(resp.body());
-    // id, name, email, avatar_url, type, email_verified, created_at
+    // id, name, email, avatar_url, bind, email_verified, created_at
+    // (bind = [{client_id, name}], otomatis terisi saat login sukses)
 }
 ```
 
@@ -118,25 +119,30 @@ public JsonNode userinfo(String accessToken) throws Exception {
   `com.nimbusds:nimbus-jose-jwt` (cek `iss` = base URL SSO, `aud` = client_id, `exp`).
 </Callout>
 
+## Bind Akun & Status Bind
+
+Pola acuan: `DummyWebSSO` (`sso.js`). Selain "Login with Doscom", tautkan akun
+lokal via [Auth API](/auth-api): `POST {SSO}/api/auth/bind` (`name`, `email`,
+`client_id`, `return_url`) → tampilkan `data.url` ke user → setelah redirect
+`{return_url}?bind_token=<JWT>`, verifikasi RS256 via JWKS (`iss`, `aud` =
+client_id sendiri, `event = account.bind`, `exp` ±5 mnt) → tautkan akun lokal.
+Sinkronisasi via `GET {SSO}/api/auth/binding/status` **hanya** untuk akun
+ter-bind lokal.
+
+Sejak update terbaru, submit form/konfirmasi **tidak langsung** mengeksekusi
+bind — SSO menyimpan niat bind + mengirim kode OTP 6 digit
+(`purpose = bind_account`) ke email user, lalu redirect ke
+`/api/auth/bind/otp?token=<PENDING>`. Bind dieksekusi dan `bind_token`
+di-redirect ke `return_url` hanya setelah OTP benar (bisa kirim ulang via
+`resend=1`). `DummyWebSSO` belum mendukung langkah OTP ini — lihat alur
+lengkap di [Auth API — Bind](/auth-api).
+
 ## Auth API & Avatar
 
-Lihat **[Auth API](/auth-api)** dan **[Avatar](/avatar)**:
-
-```java
-// Multipart upload (java.net.http tidak punya builder multipart — buat manual
-// atau pakai Spring's RestTemplate / OkHttp yang punya multipart bawaan)
-var rest = new RestTemplate();
-var headers = new HttpHeaders();
-headers.setBearerAuth(token);
-headers.setContentType(MediaType.MULTIPART_FORM_DATA);
-
-var body = new LinkedMultiValueMap<String, Object>();
-body.add("avatar", new FileSystemResource("foto-profil.png"));
-
-var entity = new HttpEntity<>(body, headers);
-var res = rest.postForEntity(SsoConfig.BASE_URL + "/api/avatar", entity, Map.class);
-// res.getBody().get("data").get("avatar_url")
-```
+Lihat **[Auth API — Bind](/auth-api)**. Upload avatar via API
+(`POST /api/avatar`) sudah **dihapus** — user mengganti foto lewat
+[Portal Akun](/account-portal) (`POST /account/avatar`); aplikasimu cukup
+membaca `avatar_url` terbaru dari `/userinfo` (contoh `userinfo()` di atas).
 
 ## Environment Variables
 

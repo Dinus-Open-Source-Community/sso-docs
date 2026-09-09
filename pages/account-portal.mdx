@@ -1,0 +1,84 @@
+---
+title: Portal Akun (Akun Doscom)
+---
+
+import { Callout } from 'nextra/components'
+
+# Portal Akun — "Akun doscom" (`/`, `/account/*`)
+
+Portal Akun adalah dashboard web untuk **end-user** SSO di:
+
+```
+https://sso.doscom.org/          (development: http://localhost:8080/)
+```
+
+Di sinilah user mendaftar, login (selalu + OTP email), mengelola profil,
+avatar, password, dan melepaskan aplikasi yang terhubung (unbind). Semua berupa
+**halaman HTML form** (bukan API JSON) — aplikasimu tidak perlu memanggilnya
+server-to-server, cukup arahkan user ke sini.
+
+<Callout type="info">
+  Bedakan dengan **Developer Console** (`/developer/*`) yang khusus untuk
+  developer/admin mengelola aplikasi OAuth — lihat
+  [Developer Console](/developer-console).
+</Callout>
+
+---
+
+## Login & Register (selalu + OTP)
+
+| Endpoint (browser) | Keterangan |
+|---|---|
+| `GET /` | Dashboard bila sudah login; account chooser bila ada session; form register bila belum ada session |
+| `POST /` (`user_id`) | Pilih akun dari chooser (butuh session valid → lanjut OTP, kecuali perangkat terpercaya) |
+| `POST /account/login` (`email`, `password`) | Login manual → kirim OTP (`login` atau `verify_account` bila email belum terverifikasi) |
+| `POST /account/register` (`name`, `email`, `password`) | Daftar akun baru → kirim OTP `verify_account` |
+| `POST /account/otp` (`email`, `purpose`, `otp`, `resend`, `remember_device`) | Verifikasi kode 6 digit. `purpose`: `verify_account` / `login` / `choose_account` / `remove_account` |
+| `GET /account/forgot-password` + `POST /account/forgot-password` (`email`) | Minta kode OTP reset |
+| `POST /account/reset-password` (`email`, `otp`, `password`, `confirm_password`) | Verifikasi OTP lalu set password baru (otomatis menandai email terverifikasi) |
+
+Catatan:
+
+- Akun tanpa password (mis. dibuat via bind) wajib lewat *Lupa password* dulu.
+- Centang "ingat perangkat 30 hari" (`remember_device=1`) menandai perangkat
+  **khusus portal** (`portal_trusted_device`) — tidak berlaku untuk alur OAuth
+  `/authorize`, begitu pula sebaliknya. Maksimal 1 device terpercaya per user
+  per alur; device lama otomatis tercabut.
+- Session browser (`session_id`, 30 hari) bisa menampung **banyak akun**
+  (multi-akun) — halaman `/` menampilkan daftar "Pilih akun".
+
+---
+
+## Dashboard — kelola akun aktif
+
+Setelah login, `GET /` menampilkan dashboard akun aktif (dipilih via cookie
+`active_user_id`):
+
+| Endpoint (browser, POST) | Keterangan |
+|---|---|
+| `POST /account/profile` (`name`, `email`) | Ubah nama/email. Email duplikat milik akun lain ditolak. |
+| `POST /account/avatar` (`avatar` file) | Upload foto profil (maks 5 MB, MinIO) — lihat [Avatar](/avatar). |
+| `POST /account/password` (`current_password`, `new_password`, `confirm_password`) | Ganti password (min 8 karakter, wajib tahu password lama). |
+| `POST /account/unbind` (`client_id`) | Lepas satu aplikasi: **revoke dulu** seluruh access + refresh token user untuk aplikasi itu, lalu hapus entri `bind`. Idempoten; pola PRG redirect ke `/` + flash message. |
+| `POST /account/remove/request` (`user_id`) | Minta hapus satu akun dari daftar perangkat ini — kode OTP dikirim ke **email akun target**, wajib diverifikasi (tanpa bypass trusted-device). Tombol **Hapus** untuk akun yang sedang aktif dalam keadaan **disabled** ("Ini akun yang sedang aktif") — pindah akun aktif / logout dulu untuk menghapusnya. |
+| `POST /account/logout` (`user_id` opsional) | `user_id` diisi = soft logout (bersihkan `active_user`, session tetap → tampil chooser). Tanpa `user_id` = keluar semua (hapus session + cookie). |
+
+Unbind dari dashboard inilah yang membuat `GET /api/auth/binding/status`
+menjawab `bound:false` — aplikasi pihak ketiga ([Auth API](/auth-api)) wajib
+menyinkronkan status ini (hanya untuk akun ter-bind lokal).
+
+> Purpose OTP `bind_account` **tidak** lewat `POST /account/otp` — ia punya
+> halaman sendiri di alur bind (`GET/POST /api/auth/bind/otp`, berlaku untuk
+> email yang bahkan belum punya akun). Lihat [Auth API — Bind](/auth-api).
+
+---
+
+## Rate Limit
+
+| Endpoint | Limit |
+|----------|-------|
+| `POST /account/login`, `POST /account/register` | 5 / 15 menit per email |
+| `POST /account/otp` | 30 / menit per email+purpose |
+| `POST /account/forgot-password` | 5 / 15 menit per email |
+| `POST /account/reset-password` | 10 / 15 menit per email |
+| `POST /account/remove/request` | 5 / 15 menit per user+IP |

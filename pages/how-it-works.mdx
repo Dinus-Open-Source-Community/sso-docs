@@ -41,8 +41,16 @@ GET https://sso.doscom.org/authorize
 
 ### User Login di SSO
 
-SSO menampilkan halaman login. User memasukkan email/password.
-Kalau user sudah punya session aktif, SSO langsung tampilkan *account chooser*.
+SSO menampilkan halaman login. Alurnya selalu lewat **OTP email 6 digit**:
+
+1. User memasukkan email + password (atau daftar akun baru lewat form register).
+2. SSO mengirim kode OTP ke email — user memasukkan kode di halaman verifikasi.
+3. Kalau user sudah punya session aktif (`session_id`, 30 hari), SSO langsung
+   tampilkan *account chooser* — pilih akun tersimpan (tetap wajib OTP,
+   kecuali perangkat sudah ditandai terpercaya 30 hari).
+
+Akun tanpa password (mis. dibuat via bind) wajib atur password lewat alur
+*Lupa password* dulu sebelum bisa login form.
 
 ### SSO Redirect Balik ke Aplikasi
 
@@ -99,13 +107,45 @@ Response — profil lengkap user (tanpa filtering scope; scope `profile`/`email`
   "name": "Nama User",
   "email": "user@doscom.org",
   "avatar_url": "https://cdn.doscom.org/avatars/4.png",
-  "type": "d-form",
+  "bind": [{ "client_id": "CLIENT_ID_KAMU", "name": "Nama Aplikasimu" }],
   "email_verified": true,
   "created_at": "2025-01-01T00:00:00Z"
 }
 ```
 
+Field `bind` adalah array keterikatan akun ke aplikasi — **otomatis terisi
+saat user berhasil login OAuth ke aplikasimu** (`RecordSSOApp`). Satu akun
+bisa terikat ke banyak aplikasi. `bind` kosong/`null` = belum ter-bind ke
+aplikasi manapun.
+
+> Implementasi referensi awal (login + sinkronisasi bind + verifikasi
+> `bind_token`, sebelum OTP bind): repo `DummyWebSSO` (`server.js`, `sso.js`,
+> `config.js`). Alur di SSO kini mewajibkan langkah OTP setelah form bind —
+> sesuaikan dengan [Auth API — Bind](/auth-api).
+
 </Steps>
+
+## Bind Akun Pihak Ketiga (tanpa OAuth penuh)
+
+Selain "Login with Doscom", aplikasi bisa menautkan akun lokal yang sudah ada
+ke SSO via **Bind API** (`POST /api/auth/bind`):
+
+1. Backend memanggil `POST /api/auth/bind` dengan
+   `{ name, email, client_id, return_url }` → menerima `url` form bind SSO.
+2. Tampilkan URL itu ke user — user mengisi/konfirmasi form di SSO.
+3. SSO menyimpan niat bind + mengirim kode OTP `bind_account` ke email user,
+   lalu redirect ke halaman input OTP (`/api/auth/bind/otp?token=<PENDING>`).
+   User memasukkan 6 digit kode (bisa kirim ulang bila kedaluwarsa).
+4. Setelah OTP benar dan bind dieksekusi, SSO redirect browser ke
+   `{return_url}?bind_token=<JWT>`.
+5. Backend verifikasi `bind_token` (RS256 via JWKS): cek `iss`, `aud` =
+   `client_id` sendiri, `event` = `account.bind`, `exp` (±5 menit) →
+   tautkan akun lokal.
+6. Sinkronisasi ulang via `GET /api/auth/binding/status?email=&client_id=`
+   — **hanya** untuk akun yang ter-bind lokal (jangan hit untuk akun
+   lokal/non-SSO).
+
+Detail request/response + contoh verifikasi: lihat [Auth API — Bind](/auth-api).
 
 ## Dua Jenis Client
 
@@ -115,12 +155,12 @@ Response — profil lengkap user (tanpa filtering scope; scope `profile`/`email`
 | **Public** | SPA / mobile app (tidak bisa simpan secret) | Tidak | **Wajib** |
 
 <Callout type="info">
-  **Daftar aplikasimu dulu** di Developer Console untuk mendapatkan `client_id` dan `client_secret` — akun dibuat oleh admin sistem, tidak ada pendaftaran mandiri.
+  **Daftar aplikasimu dulu** di Developer Console untuk mendapatkan `client_id` dan `client_secret` — akun developer dibuat oleh admin/super_admin, tidak ada pendaftaran mandiri.
 </Callout>
 
 ### Cara daftar aplikasi
 
-1. Buka **Developer Console** di `https://sso.doscom.org/developer/login` (login dengan akun dari admin).
+1. Buka **Developer Console** di `https://sso.doscom.org/developer/login` (login dengan akun developer dari admin — auth memakai cookie HttpOnly `dev_portal`, bukan localStorage).
 2. Klik **+ Aplikasi baru**, isi nama aplikasi dan pilih tipe client (confidential/public).
 3. Isi **Redirect URI** — alamat callback aplikasimu, misal `https://appkamu.com/callback`.
 4. Setelah dibuat, **simpan `client_secret` segera** — hanya tampil sekali, tidak bisa dilihat lagi.
@@ -171,5 +211,14 @@ grant_type=refresh_token
 
 <Callout type="warning">
   Simpan refresh token terbaru segera setelah menerima response refresh.
-  Kalau refresh token lama dipakai lagi (reuse), **seluruh token keluarga user di aplikasimu akan dicabut**.
+  Kalau refresh token lama dipakai lagi (reuse), **seluruh refresh token keluarga user di aplikasimu akan dicabut** (diduga dicuri).
 </Callout>
+
+## Portal Akun & Developer Console
+
+- **Portal Akun** (`https://sso.doscom.org/`) — dashboard end-user "Akun
+  doscom": login/register OTP, edit profil, upload avatar, ganti password,
+  lepas aplikasi (unbind + revoke token), hapus akun dari perangkat. Lihat
+  [Portal Akun](/account-portal).
+- **Developer Console** (`/developer/*`) — daftarkan aplikasi OAuth, kelola
+  redirect URI, regenerate secret. Lihat [Developer Console](/developer-console).

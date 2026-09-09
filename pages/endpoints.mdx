@@ -12,9 +12,10 @@ Dokumentasi ini membagi endpoint menjadi tiga kelompok:
 
 | Kelompok | Path | Kegunaan |
 |----------|------|----------|
-| **OAuth / OIDC** | `/authorize`, `/token`, `/userinfo`, ... | Alur "Login With Namamu" antar aplikasi |
-| **Auth API** | `/api/auth/*` | Transfer akun, ganti password — API JSON langsung (lihat [Auth API](/auth-api)) |
-| **Avatar** | `/api/avatar` | Upload foto profil user (lihat [Avatar](/avatar)) |
+| **OAuth / OIDC** | `/authorize`, `/token`, `/userinfo`, ... | Alur "Login With Doscom" antar aplikasi |
+| **Auth API (Bind)** | `/api/auth/bind`, `/api/auth/bind/otp`, `/api/auth/binding/status` | Tautkan akun lokal ke SSO (wajib OTP) + cek status bind (lihat [Auth API](/auth-api)) |
+| **Portal Akun** | `/`, `/account/*` | Dashboard end-user "Akun doscom" — HTML form, bukan JSON (lihat [Portal Akun](/account-portal)) |
+| **Avatar** | `POST /account/avatar` | Upload foto profil via Portal Akun (lihat [Avatar](/avatar)) |
 
 Discovery document lengkap tersedia di:
 
@@ -56,11 +57,11 @@ Halaman `/authorize` juga menerima submit form langsung (bukan API — untuk bro
 
 | Endpoint | Method | Form fields | Keterangan |
 |----------|--------|-------------|------------|
-| `/authorize` | POST | `email`, `password` — atau `user_id` untuk "Pilih akun" | Login manual / pilih akun tersimpan |
-| `/authorize/verify` | POST | `email`, `purpose`, `code`, `resend` (opsional) | Verifikasi OTP 6 digit (login/daftar/pilih akun) |
-| `/register` | POST | `name`, `email`, `password` | Daftar akun baru, lanjut verifikasi OTP |
-| `/forgot-password` | GET/POST | `email` | Minta kode reset password |
-| `/reset-password` | POST | `email`, `password`, `code` | Set password baru |
+| `/authorize` | POST | `email`, `password` — atau `user_id` untuk "Pilih akun" | Login manual / pilih akun tersimpan (lanjut OTP) |
+| `/authorize/verify` | POST | `email`, `purpose` (`verify_account`/`login`/`choose_account`), `otp`, `resend` (opsional), `remember_device` (opsional) | Verifikasi OTP 6 digit |
+| `/register` | POST | `name`, `email`, `password` | Daftar akun baru, lanjut verifikasi OTP (otomatis catat bind aplikasi) |
+| `/forgot-password` | GET/POST | `email` | Minta kode OTP reset password |
+| `/reset-password` | POST | `email`, `otp`, `password`, `confirm_password` | Verifikasi OTP lalu set password baru |
 
 Semua form di atas membawa parameter OAuth (`client_id`, `redirect_uri`, `state`, ...) yang diteruskan kembali ke `redirect_uri` setelah berhasil. Aplikasimu **tidak perlu** mengimplementasikannya — cukup redirect ke `/authorize`.
 
@@ -150,14 +151,13 @@ Authorization: Bearer ACCESS_TOKEN
   "name": "Budi Santoso",
   "email": "budi@doscom.org",
   "avatar_url": "https://cdn.doscom.org/avatars/4.png",
-  "type": "d-form",
+  "bind": [{ "client_id": "CLIENT_ID_KAMU", "name": "Nama Aplikasimu" }],
   "email_verified": true,
   "created_at": "2025-01-01T00:00:00Z"
 }
 ```
 
-Field `type` menandai asal akun (hasil `POST /api/auth/transfer`):
-`d-form`, `google`, `github`, dll.
+Alias kompatibilitas `GET /api/userinfo` tersedia dengan response yang sama.
 
 <Callout type="info">
   `/userinfo` selalu mengembalikan profil lengkap — tidak ada filtering scope.
@@ -252,12 +252,23 @@ Metadata OIDC lengkap: semua URL endpoint, scope, algoritma, dll.
 
 ---
 
-# Auth API & Avatar
+# Auth API (Bind), Portal Akun & Avatar
 
-API JSON untuk mengelola akun **tanpa** alur redirect OAuth:
-
-- **Auth API** (`/api/auth/*`): transfer akun, ganti password — lihat **[Auth API](/auth-api)**. Endpoint `register`, `login`, `verify-email`, `forgot-password`, `reset-password`, dan `me` sedang dinonaktifkan/dihapus; profil user lewat `GET /userinfo` di atas.
-- **Avatar** (`POST /api/avatar`): upload foto profil — lihat **[Avatar](/avatar)**
+- **Auth API — Bind** (`/api/auth/bind`, `/api/auth/bind/otp`,
+  `/api/auth/binding/status`): tautkan akun lokal aplikasimu ke SSO (wajib
+  verifikasi OTP `bind_account`) + cek status bind — lihat
+  **[Auth API](/auth-api)**. Endpoint lama `register`, `login`,
+  `verify-email`, `forgot-password`, `reset-password`, `transfer`, dan
+  `change-password` di `/api/auth/*` sedang **dinonaktifkan/dihapus**;
+  registrasi & password kini lewat alur browser OAuth (`/authorize`,
+  `/register`, `/forgot-password`), Portal Akun, atau alur bind + OTP.
+- **Portal Akun** (`/`, `/account/*`): dashboard HTML "Akun doscom" untuk
+  end-user (login/register OTP, profil, avatar, unbind) — lihat
+  **[Portal Akun](/account-portal)**. Bukan API JSON — jangan dipanggil
+  server-to-server.
+- **Avatar** (`POST /account/avatar` via Portal Akun): upload foto profil —
+  lihat **[Avatar](/avatar)**. Endpoint JSON lama `POST /api/avatar` sudah
+  **dihapus**.
 
 ---
 
@@ -271,3 +282,6 @@ API JSON untuk mengelola akun **tanpa** alur redirect OAuth:
 | `POST /forgot-password` (form OAuth) | 5 percobaan / 15 menit per email |
 | `POST /reset-password` | 10 percobaan / 15 menit per email |
 | `POST /token` | 20 request / menit per IP |
+| `POST /api/auth/bind`, `POST /api/auth/bind/form`, `POST /api/auth/bind/confirm`, `POST /api/auth/bind/otp` | 10 request / menit per IP |
+| `GET /api/auth/bind/form`, `GET /api/auth/bind/otp` | 30 request / menit per IP |
+| `GET /api/auth/binding/status` | 60 request / menit per IP |

@@ -118,8 +118,10 @@ let userinfo: CoreUserInfoClaims = client
 
 <Callout type="info">
   `CoreUserInfoClaims` bawaan hanya memetakan claim standar OIDC (`sub`, `name`,
-  `email`). Field `avatar_url` & `created_at` tidak standar — definisikan struct
-  custom dengan `Deserialize` dan parse sendiri kalau dibutuhkan.
+  `email`). Field `avatar_url`, `bind`, & `created_at` tidak standar —
+  definisikan struct custom dengan `Deserialize` dan parse sendiri kalau
+  dibutuhkan (`bind` = array `{client_id, name}`, otomatis terisi saat login
+  sukses).
 </Callout>
 
 ## Refresh Token
@@ -134,27 +136,39 @@ let new_token: CoreTokenResponse = client
 // SSO me-rotate refresh token — simpan token baru!
 ```
 
+## Bind Akun & Status Bind
+
+Pola acuan: `DummyWebSSO` (`sso.js`). Selain "Login with Doscom", tautkan akun
+lokal via [Auth API](/auth-api): `POST {SSO}/api/auth/bind` (`name`, `email`,
+`client_id`, `return_url`) → tampilkan `data.url` → setelah redirect
+`{return_url}?bind_token=<JWT>`, verifikasi RS256 via JWKS (`iss`, `aud` =
+client_id sendiri, `event = account.bind`, `exp` ±5 mnt). Sinkronisasi via
+`GET {SSO}/api/auth/binding/status` **hanya** untuk akun ter-bind lokal.
+
+Sejak update terbaru, submit form/konfirmasi **tidak langsung** mengeksekusi
+bind — SSO menyimpan niat bind + mengirim kode OTP 6 digit
+(`purpose = bind_account`) ke email user, lalu redirect ke
+`/api/auth/bind/otp?token=<PENDING>`. Bind dieksekusi dan `bind_token`
+di-redirect ke `return_url` hanya setelah OTP benar (bisa kirim ulang via
+`resend=1`). `DummyWebSSO` belum mendukung langkah OTP ini — lihat alur
+lengkap di [Auth API — Bind](/auth-api).
+
 ## Auth API & Avatar
 
-Untuk API JSON langsung, pakai `reqwest` — lihat **[Auth API](/auth-api)** dan
-**[Avatar](/avatar)**:
+Untuk API JSON langsung, pakai `reqwest` — lihat
+**[Auth API — Bind](/auth-api)**. Upload avatar via API sudah **dihapus** —
+user mengganti foto lewat [Portal Akun](/account-portal); aplikasimu cukup
+membaca `avatar_url` terbaru dari `/userinfo`:
 
 ```rust
-use reqwest::blocking::multipart;
-
-let client = reqwest::blocking::Client::new();
-
-let form = multipart::Form::new()
-    .file("avatar", "foto-profil.png")?;
-
 let res: serde_json::Value = client
-    .post("https://sso.doscom.org/api/avatar")
-    .bearer_auth(token)
-    .multipart(form)
+    .get("https://sso.doscom.org/userinfo")
+    .bearer_auth(access_token)
     .send()?
     .json()?;
 
-let avatar_url = res["data"]["avatar_url"].as_str().unwrap();
+let avatar_url = res["avatar_url"].as_str().unwrap();
+// res["bind"] = [{ "client_id": ..., "name": ... }]
 ```
 
 ## Environment Variables

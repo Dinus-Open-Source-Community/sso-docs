@@ -74,7 +74,8 @@ Route::get('/callback', function (Request $request) use ($provider) {
     ]);
 
     // Ambil data user dari /userinfo
-    // Response: id, name, email, avatar_url, type, email_verified, created_at
+    // Response: id, name, email, avatar_url, bind, email_verified, created_at
+    // (bind = [{client_id, name}], otomatis terisi saat login sukses)
     $user = $provider->getResourceOwner($token);
     $userArray = $user->toArray();
 
@@ -135,23 +136,34 @@ $decoded = JWT::decode($idToken, $keys);
 // $decoded->sub, $decoded->email, $decoded->picture, dll.
 ```
 
+## Bind Akun & Status Bind
+
+Pola acuan: `DummyWebSSO` (`sso.js`). Selain "Login with Doscom", tautkan akun
+lokal via [Auth API](/auth-api): `POST {SSO}/api/auth/bind` (`name`, `email`,
+`client_id`, `return_url`) → tampilkan `data.url` ke user → setelah redirect
+`{return_url}?bind_token=<JWT>`, verifikasi RS256 via JWKS (`iss`, `aud` =
+client_id sendiri, `event = account.bind`, `exp` ±5 mnt) → tautkan akun lokal.
+Sinkronisasi via `GET {SSO}/api/auth/binding/status` **hanya** untuk akun
+ter-bind lokal (akun lokal jangan hit; `bound:false`/404 → hapus kaitan lokal).
+
+Sejak update terbaru, submit form/konfirmasi **tidak langsung** mengeksekusi
+bind — SSO menyimpan niat bind + mengirim kode OTP 6 digit
+(`purpose = bind_account`) ke email user, lalu redirect ke
+`/api/auth/bind/otp?token=<PENDING>`. Bind dieksekusi dan `bind_token`
+di-redirect ke `return_url` hanya setelah OTP benar (bisa kirim ulang via
+`resend=1`). `DummyWebSSO` belum mendukung langkah OTP ini — lihat alur
+lengkap di [Auth API — Bind](/auth-api).
+
 ## Auth API & Avatar
 
-Untuk upload avatar langsung (tanpa alur redirect OAuth), lihat
-**[Auth API](/auth-api)** dan **[Avatar](/avatar)**:
+Untuk menautkan akun lokal lihat **[Auth API — Bind](/auth-api)**.
+Upload avatar via API (`POST /api/avatar`) sudah **dihapus** — user mengganti
+foto lewat [Portal Akun](/account-portal) (`POST /account/avatar`);
+aplikasimu cukup membaca `avatar_url` terbaru dari `/userinfo`:
 
 ```php
-$client = new \GuzzleHttp\Client(['base_uri' => 'https://sso.doscom.org']);
-
-$res = $client->post('/api/avatar', [
-    'headers' => ['Authorization' => 'Bearer ' . $token],
-    'multipart' => [[
-        'name'     => 'avatar',
-        'contents' => fopen('/path/ke/foto.png', 'r'),
-        'filename' => 'foto.png',
-    ]],
-]);
-$avatarUrl = json_decode($res->getBody(), true)['data']['avatar_url'];
+$userArray = $user->toArray();
+$avatarUrl = $userArray['avatar_url'] ?? null; // baca, bukan upload
 ```
 
 ## Environment Variables (.env Laravel)

@@ -6,111 +6,124 @@ import { Callout } from 'nextra/components'
 
 # Admin — Kelola User
 
-Halaman manajemen user tersedia di:
+Halaman manajemen tersedia di:
 
 ```
 https://sso.doscom.org/admin/users
 ```
 
+Halaman ini mengelola **akun developer** (`/api/developer/accounts` — akun
+portal: `developer` / `admin`, plus `super_admin` yang sudah ada). Auth memakai
+cookie `dev_portal` yang sama dengan Developer Console (tidak ada input token
+manual di UI — `fetch` mengirim cookie otomatis).
+
 <Callout type="warning">
-  Halaman ini hanya bisa diakses oleh pengguna dengan role **admin** atau **super_admin**.
-  Tombol "Kelola User" di Developer Console hanya muncul untuk role tersebut.
+  Halaman ini hanya bisa diakses oleh role **admin** atau **super_admin**
+  (guard `portalCookieGuard` + `requireAdmin`). Tombol "Kelola User" di
+  Developer Console hanya muncul untuk role tersebut.
 </Callout>
 
 ---
 
-## Daftar User
+## Dua tabel akun (jangan tertukar)
 
-Tabel user menampilkan: ID, Nama, Email, Role, Status Developer, dan waktu dibuat.
+| Tabel | Isi | Role | Dikelola lewat |
+|---|---|---|---|
+| `users` | End-user OAuth (akun "Login with Doscom" biasa) — **tanpa role**, semua setara member | — (tidak ada kolom role) | `GET/PUT/DELETE /api/users/*` (tanpa halaman UI khusus; registrasi publik hanya via alur OAuth `/register` + OTP atau bind) |
+| `developers` | Akun portal (Developer Console + Admin) | `developer` (kelola app sendiri) \| `admin` (lihat semua app + user) \| `super_admin` (semua operasi) | Halaman `/admin/users` + `GET/POST/PUT/DELETE /api/developer/accounts` |
+
+PII (`name`, `email`, `avatar_url`) di kedua tabel disimpan ter-enkripsi
+AES-256-GCM; kolom `bind` di `users` tidak dienkripsi (struktur bebas, bukan
+PII langsung).
 
 ---
 
-## Role & Hak Akses
+## Halaman `/admin/users` — kelola akun developer
 
-| Role | Hak Akses |
-|------|-----------|
-| `super_admin` | Semua operasi: buat/ubah/hapus user (termasuk buat admin), kelola semua app |
-| `admin` | Lihat user, kelola semua app developer (buat/ubah/hapus app milik siapapun) |
-| `member` | Hanya bisa login via SSO, kelola app milik sendiri saja |
+Tabel menampilkan: ID, Nama, Email, Role, waktu dibuat — dengan aksi
+Ubah/Hapus per baris dan form Tambah akun.
+
+### Buat akun developer (super_admin saja)
+
+| Field | Validasi |
+|-------|----------|
+| **Nama** | min 3, maks 100 karakter |
+| **Email** | format email valid, maks 150 karakter (unik, di-lowercase) |
+| **Password** | min 8, maks 72 karakter |
+| **Role** | `developer` atau `admin` saja |
 
 <Callout type="info">
-  **Hanya `super_admin`** yang bisa membuat/mengubah/menghapus user. `admin` hanya punya akses baca user.
-  Role `super_admin` tidak bisa dipilih saat membuat user dari UI — di-set langsung via API atau seeder awal.
+  Role `super_admin` **tidak bisa** dipilih saat membuat user dari UI maupun
+  API (`oneof=admin developer`) — `super_admin` dibuat via seeder
+  (`EnsureSuperAdmin` / `ADMIN_EMAIL` + `ADMIN_PASSWORD`). Kamu juga tidak bisa
+  menghapus akunmu sendiri (anti-lockout).
 </Callout>
 
----
+### Edit / hapus akun developer (super_admin saja)
 
-## Buat User Baru
-
-Field yang diisi saat membuat user:
-
-| Field | Keterangan | Validasi |
-|-------|-----------|----------|
-| **Nama** | Nama lengkap user | min 3, maks 100 karakter |
-| **Email** | Alamat email (unik) | format email valid, maks 150 karakter |
-| **Password** | Password awal | min 8, maks 72 karakter |
-| **Role** | `member` (default) atau `admin` | |
-| **Is Developer** | Centang jika user boleh daftar OAuth app | boolean |
+- Edit: `name`, `email`, `password` (opsional), `role` (`admin`/`developer`).
+- Hapus: soft delete (data tersimpan di DB, tidak muncul di list).
 
 ---
 
-## Edit User
+## API Endpoint (untuk integrasi programatik)
 
-Semua field bisa diubah kecuali password. Untuk reset password, hapus dan buat ulang user (atau buat endpoint reset password terpisah).
+Semua endpoint management memakai guard `PortalStrategy`: token **akun
+developers** (`kind: developer`) via header `Authorization: Bearer ...`
+**atau** cookie `dev_portal` (halaman admin memakai cookie). Token
+`kind: user` ditolak.
 
-Field yang bisa diubah via `PUT /api/users/:id`:
-- `name`
-- `email`
-- `role` (`admin` atau `member`)
-- `is_developer`
-
----
-
-## Hapus User
-
-Klik tombol **Hapus** di baris user, konfirmasi di dialog. User dihapus secara **soft delete** (data tersimpan di DB, tidak muncul di list).
-
----
-
-## API Endpoint User (untuk integrasi programatik)
-
-Semua endpoint butuh JWT Bearer token dengan role yang sesuai.
+### Akun developer — `/api/developer/accounts`
 
 | Method | Path | Role | Keterangan |
 |--------|------|------|-----------|
-| `GET` | `/api/users` | admin, super_admin | List semua user |
-| `GET` | `/api/users/:id` | admin, super_admin | Detail user |
-| `POST` | `/api/users` | super_admin | Buat user baru |
-| `PUT` | `/api/users/:id` | super_admin | Update user |
-| `DELETE` | `/api/users/:id` | super_admin | Hapus user (soft delete) |
-
-**Contoh buat user via API:**
+| `GET` | `/api/developer/accounts` | admin, super_admin | List semua akun developer |
+| `GET` | `/api/developer/accounts/:id` | admin, super_admin | Detail akun developer |
+| `POST` | `/api/developer/accounts` | super_admin | Buat akun (`name`, `email`, `password`, `role: admin\|developer`) |
+| `PUT` | `/api/developer/accounts/:id` | super_admin | Update akun |
+| `DELETE` | `/api/developer/accounts/:id` | super_admin | Hapus akun (tidak bisa hapus diri sendiri) |
 
 ```bash
-curl -X POST https://sso.doscom.org/api/users \
-  -H "Authorization: Bearer TOKEN_SUPER_ADMIN" \
+curl -X POST https://sso.doscom.org/api/developer/accounts \
+  -H "Authorization: Bearer TOKEN_DEVELOPER_SUPER_ADMIN" \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "Budi Santoso",
-    "email": "budi@doscom.org",
+    "name": "Admin Baru",
+    "email": "adminbaru@doscom.org",
     "password": "password123",
-    "role": "member",
-    "is_developer": true
+    "role": "admin"
   }'
 ```
 
-**Response `201 Created`:**
+### End-user OAuth — `/api/users`
+
+| Method | Path | Role | Keterangan |
+|--------|------|------|-----------|
+| `GET` | `/api/users` | admin, super_admin | List end-user |
+| `GET` | `/api/users/:id` | admin, super_admin | Detail end-user |
+| `PUT` | `/api/users/:id` | super_admin | Update (`name`, `email` saja — tidak ada `role`/`is_developer`) |
+| `DELETE` | `/api/users/:id` | super_admin | Hapus user (soft delete) |
+
+<Callout type="info">
+  Tidak ada `POST /api/users` — akun end-user **tidak dibuat lewat API**.
+  Registrasi publik hanya lewat alur OAuth (`POST /register` + OTP) atau alur
+  bind (`POST /api/auth/bind/form`). Response user kini memakai field `bind`
+  (`[{client_id, name}]`), bukan `type` lama.
+</Callout>
+
+**Response user (`201`/`200`):**
 
 ```json
 {
   "status": true,
-  "message": "user created",
+  "message": "user fetched",
   "data": {
     "id": 5,
     "name": "Budi Santoso",
     "email": "budi@doscom.org",
-    "role": "member",
-    "is_developer": true,
+    "avatar_url": "https://cdn.doscom.org/avatars/....png",
+    "bind": [{ "client_id": "abc123", "name": "DummyWebSSO" }],
+    "email_verified": true,
     "created_at": "2025-01-01T00:00:00Z"
   }
 }

@@ -108,7 +108,8 @@ app.get('/callback', async (req, res) => {
   Klaim `tokenSet.claims()` berasal dari **id_token** (`sub`, `picture`, ...)
   dan mengikuti scope yang diminta. `client.userinfo()` memanggil endpoint
   `/userinfo` yang formatnya berbeda dan **selalu** mengembalikan profil
-  lengkap: `{ id, name, email, avatar_url, type, email_verified, created_at }`.
+  lengkap: `{ id, name, email, avatar_url, bind, email_verified, created_at }`
+  (`bind` = array `[{client_id, name}]`, otomatis terisi saat login sukses).
 </Callout>
 
 ## Refresh Token
@@ -141,22 +142,50 @@ app.post('/logout', async (req, res) => {
 })
 ```
 
-## Auth API & Avatar
+## Bind Akun & Status Bind
 
-Untuk upload avatar langsung (tanpa alur redirect OAuth), lihat
-**[Auth API](/auth-api)** dan **[Avatar](/avatar)**:
+Pola acuan: `DummyWebSSO` (`sso.js` + `server.js`). Selain "Login with
+Doscom", tautkan akun lokal via [Auth API](/auth-api):
 
 ```js
-// Upload avatar (Node 18+: FormData + Blob)
-const form = new FormData()
-form.append('avatar', new Blob([await fs.readFile('foto.png')]), 'foto.png')
-
-const res = await fetch('https://sso.doscom.org/api/avatar', {
+// 1. Minta URL form bind SSO
+const res = await fetch(`${SSO}/api/auth/bind`, {
   method: 'POST',
-  headers: { Authorization: `Bearer ${token}` },
-  body: form,
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    name, email,
+    client_id: process.env.SSO_CLIENT_ID,
+    return_url: `${process.env.APP_BASE_URL}/profile`,
+  }),
 })
-const { data } = await res.json() // data.avatar_url
+const { data } = await res.json() // data.url -> tampilkan sebagai link
+
+// 2. User isi form / konfirmasi di SSO -> SSO simpan niat bind + kirim OTP
+//    bind_account ke email -> redirect /api/auth/bind/otp?token=<PENDING>
+//    -> user input 6 digit kode (bisa kirim ulang via resend=1).
+//    OTP benar -> bind dieksekusi -> redirect {return_url}?bind_token=<JWT>.
+
+// 3. Setelah redirect {return_url}?bind_token=<JWT>: verifikasi RS256 via
+//    {SSO}/.well-known/jwks.json — cek iss, aud == client_id sendiri,
+//    event == 'account.bind', exp (±5 mnt) — lalu tautkan akun lokal.
+
+// 3. Sinkronisasi: GET {SSO}/api/auth/binding/status?email=&client_id=
+//    HANYA untuk akun ter-bind lokal. bound:false/404 -> hapus kaitan lokal;
+//    429/jaringan -> pakai cache lokal.
+//    Catatan: DummyWebSSO belum mendukung langkah OTP di atas.
+```
+
+## Auth API & Avatar
+
+Untuk menautkan akun lokal lihat **[Auth API — Bind](/auth-api)**.
+Upload avatar via API (`POST /api/avatar`) sudah **dihapus** — user mengganti
+foto lewat [Portal Akun](/account-portal); aplikasimu cukup membaca
+`avatar_url` terbaru dari `/userinfo`:
+
+```js
+// Baca avatar terbaru (bukan upload)
+const userinfo = await client.userinfo(tokenSet.access_token)
+const avatarUrl = userinfo.avatar_url
 ```
 
 ## Environment Variables

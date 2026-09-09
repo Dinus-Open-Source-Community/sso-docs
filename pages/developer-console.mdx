@@ -18,13 +18,21 @@ URL: `https://sso.doscom.org/developer/login`
 
 ## Login
 
-Masukkan email dan password yang diberikan admin. Setelah login, JWT disimpan di `localStorage` dan kamu otomatis diarahkan ke Dashboard.
+Masukkan email dan password akun developer yang diberikan admin/super_admin. Setelah login, server menyetel cookie HttpOnly `dev_portal` (JWT `kind: developer`) dan kamu otomatis diarahkan ke Dashboard (atau ke `?next=` semula).
+
+<Callout type="warning">
+  Token portal tidak disimpan di `localStorage` — jangan baca/manual-set JWT
+  di JavaScript. Cookie HttpOnly dikirim otomatis browser (`SameSite=Lax`).
+  Token `kind: user` (akun end-user biasa) ditolak portal ini.
+</Callout>
 
 ---
 
 ## Dashboard — Daftar Aplikasi
 
-Dashboard menampilkan semua aplikasi yang terdaftar atas namamu. Untuk **admin** dan **super_admin**, semua aplikasi dari semua developer ditampilkan.
+Dashboard menampilkan aplikasi milikmu. Untuk role **admin** dan
+**super_admin**, semua aplikasi dari semua developer ditampilkan. Role
+`developer` biasa hanya melihat aplikasi miliknya sendiri.
 
 Setiap kartu aplikasi menampilkan:
 - Nama aplikasi dan logo (jika ada)
@@ -75,18 +83,19 @@ SSO_BASE_URL=https://sso.doscom.org
 
 ## Edit Aplikasi
 
-Dari Dashboard klik **Ubah** di kartu aplikasi. Kamu bisa mengubah:
+Dari Dashboard klik **Ubah** di kartu aplikasi (`/developer/apps/:id/edit`). Kamu bisa mengubah:
 
 - Nama aplikasi
-- Daftar Redirect URI
+- Daftar Redirect URI (baris kosong otomatis diabaikan)
 - Logo URL
-- Status aktif/nonaktif
+- Status aktif/nonaktif (tombol Toggle)
 
 ### Regenerate Client Secret
 
 Jika `client_secret` bocor atau perlu diganti:
 
-1. Di Dashboard, klik **Regenerate secret** di kartu aplikasi — atau
+1. Di Dashboard, klik **Regenerate secret** di kartu aplikasi
+   (`POST /developer/apps/:id/regenerate`) — atau
 2. Di halaman Edit, gunakan tombol **Regenerate Secret**.
 
 <Callout type="warning">
@@ -97,12 +106,24 @@ Jika `client_secret` bocor atau perlu diganti:
 
 ## Hapus Aplikasi
 
-Klik **Hapus** di kartu aplikasi dan konfirmasi di dialog yang muncul.
+Klik **Hapus** di kartu aplikasi (`POST /developer/apps/:id/delete`) dan konfirmasi di dialog yang muncul.
 
 Efek penghapusan:
 - Aplikasi di-nonaktifkan (`is_active = false`)
 - **Semua refresh token dan access token** yang terkait langsung dicabut (revoke)
 - User yang sedang menggunakan aplikasi tersebut akan ter-logout otomatis
+
+---
+
+## Halaman Admin & Logout
+
+- **Kelola User** (`GET /admin/users`, tombol hanya muncul untuk role
+  `admin`/`super_admin`) — kelola akun developer & user. Lihat
+  [Admin](/admin).
+- **Logout** (`POST /developer/logout`) — hapus cookie `dev_portal`, kembali
+  ke `/developer/login`.
+
+Rate limit halaman: login 10/menit/IP, buat app 60/menit/IP.
 
 ---
 

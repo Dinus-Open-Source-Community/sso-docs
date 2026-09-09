@@ -9,8 +9,10 @@ import { Callout } from 'nextra/components'
 Package `ssoauth` adalah Go client resmi untuk DOSCOM SSO. Menangani PKCE, state,
 token exchange, verifikasi JWT via JWKS, refresh, dan revoke.
 
-Contoh aplikasi lengkap yang memakai package ini: `dummyweb1` dan `dummyweb2`
-di repo `sso-auth` (alur `/authorize` → `/callback` → `Exchange` → `Userinfo`).
+Contoh aplikasi lengkap yang memakai package ini: `DummyWebSSO`
+(login lokal + "Login with Doscom" + tombol Bind di Profile — lihat
+`server.js`, `sso.js`, `config.js`) dengan alur
+`/authorize` → `/callback` → `Exchange` → `Userinfo` → sinkronisasi bind.
 
 ## Instalasi
 
@@ -105,7 +107,9 @@ func callbackHandler(w http.ResponseWriter, r *http.Request) {
         http.Error(w, "ambil /userinfo gagal: "+err.Error(), http.StatusInternalServerError)
         return
     }
-    // user["id"], user["name"], user["email"], user["avatar_url"]
+    // user["id"], user["name"], user["email"], user["avatar_url"],
+    // user["bind"] ([]{client_id,name} — otomatis terisi saat login sukses),
+    // user["email_verified"]
 
     // 6. (Opsional) Verifikasi id_token — signature RS256 via JWKS, iss, aud, exp.
     //    Key di-cache otomatis, refresh sekali kalau gagal (rotasi RSA key).
@@ -170,8 +174,37 @@ func logoutHandler(w http.ResponseWriter, r *http.Request) {
 
 `TokenSet`: `{access_token, token_type, expires_in, refresh_token, id_token, scope}`.
 
+## Bind Akun & Status Bind (tanpa OAuth penuh)
+
+Selain "Login with Doscom", aplikasimu bisa menautkan akun lokal via
+[Auth API](/auth-api) — pola yang dipakai `DummyWebSSO` (`POST /bind-form`):
+
+1. `POST {SSO}/api/auth/bind` dengan `{ name, email, client_id, return_url }`
+   (`return_url = {APP}/profile`) → terima `data.url` form bind SSO.
+2. Tampilkan URL itu ke user. Setelah user isi form / konfirmasi di SSO,
+   SSO menyimpan niat bind + mengirim kode OTP `bind_account` ke email,
+   lalu redirect ke `/api/auth/bind/otp?token=<PENDING>` — user input 6
+   digit kode (bisa kirim ulang via `resend=1`).
+3. OTP benar → bind dieksekusi → browser di-redirect ke
+   `{APP}/profile?bind_token=<JWT>`.
+4. Verifikasi `bind_token` (RS256 via JWKS `{SSO}/.well-known/jwks.json`):
+   cek `iss`, `aud` = client_id sendiri, `event` = `account.bind`, `exp`
+   (±5 menit) → tautkan akun lokal (`sso_id`).
+4. Sinkronisasi via `GET {SSO}/api/auth/binding/status?email=&client_id=` —
+   **hanya** bila akun ter-bind lokal; akun lokal/non-SSO jangan hit sama
+   sekali. `bound:false`/404 → hapus kaitan lokal; 429/jaringan → pakai cache
+   lokal.
+
+Lihat implementasi acuan di `DummyWebSSO/sso.js`
+(`requestBindFormUrl`, `verifyBindToken`, `fetchBindingStatus`) — catatan:
+`DummyWebSSO` belum mendukung langkah OTP di atas (masih alur lama tanpa OTP).
+
 ## API Auth & Avatar
 
-Butuh upload avatar langsung dari Go (bukan alur OAuth)? Lihat
-**[Auth API](/auth-api)** dan **[Avatar](/avatar)**. Profil user diambil lewat
+Butuh menautkan akun lokal (bukan alur OAuth)? Lihat
+**[Auth API — Bind](/auth-api)**. Profil user diambil lewat
 `client.Userinfo(ctx, accessToken)` — lihat tabel referensi di atas.
+Upload avatar tidak tersedia via API (`POST /api/avatar` sudah dihapus) —
+user mengganti foto lewat [Portal Akun](/account-portal) (`POST
+/account/avatar`), aplikasimu cukup membaca `avatar_url` terbaru dari
+`/userinfo`.
